@@ -1,0 +1,99 @@
+# Friday Hub v2 - Master Configuration
+
+models:
+  primary_provider: ollama
+  fallback_provider: openrouter
+
+  brain:
+    ollama: ${OLLAMA_BRAIN_MODEL:-qwen3:4b}
+    openrouter: ${OPENROUTER_BRAIN_MODEL:-qwen/qwen-2.5-72b-instruct}
+    temperature: 0.3
+    max_tokens: 4096
+
+  fast:
+    ollama: ${OLLAMA_FAST_MODEL:-qwen2.5-coder:3b}
+    openrouter: ${OPENROUTER_FAST_MODEL:-qwen/qwen-2.5-coder-32b-instruct}
+    temperature: 0.2
+    max_tokens: 2048
+
+agents:
+  claude-code:
+    name: Claude Code
+    command: ${CLAUDE_CODE_CMD:-claude}
+    enabled: true
+    priority: 1
+    capabilities:
+      - code-refactoring
+      - multi-file-edit
+      - deep-understanding
+      - debugging
+      - architecture
+    execute_args: ["-p", "{prompt}"]
+    version_args: ["--version"]
+    health_args: ["--doctor"]
+    execute_pattern: "{cmd} -p \"{prompt}\""
+    version_command: "{cmd} --version"
+    health_command: "{cmd} --doctor"
+
+  codex:
+    name: Codex CLI
+    command: ${CODEX_CMD:-codex}
+    enabled: true
+    priority: 2
+    capabilities:
+      - fast-coding
+      - test-generation
+      - routine-tasks
+      - sandboxed-execution
+    execute_args: ["{prompt}"]
+    version_args: ["--version"]
+    health_args: null
+    execute_pattern: "{cmd} \"{prompt}\""
+    version_command: "{cmd} --version"
+    health_command: null
+
+  openclaw:
+    name: OpenClaw
+    command: ${OPENCLAW_CMD:-openclaw}
+    enabled: true
+    priority: 3
+    capabilities:
+      - multi-platform
+      - automation
+      - messaging
+      - tool-heavy
+      - web-automation
+    execute_args: ["run", "{prompt}"]
+    version_args: ["--version"]
+    health_args: ["doctor"]
+    execute_pattern: "{cmd} run \"{prompt}\""
+    version_command: "{cmd} --version"
+    health_command: "{cmd} doctor"
+
+router:
+  default_agent: claude-code
+  fallbacks:
+    claude-code: [codex, openclaw]
+    codex: [claude-code, openclaw]
+    openclaw: [claude-code, codex]
+
+memory:
+  short_term:
+    max_entries: 50
+    ttl_seconds: 3600
+  long_term:
+    db_path: ./data/memory
+    collection_name: friday_memory
+    max_results: 5
+  logs:
+    directory: ./data/logs
+    max_files: 200
+
+health:
+  smoke_test_timeout: 15
+  version_lock_path: ./data/versions.lock.json
+
+learning:
+  enabled: true
+  auto_evaluate: true
+  min_feedback_for_learning: 5

@@ -1,0 +1,1 @@
+"""Friday Hub — Test suite."""
