@@ -5,26 +5,36 @@ Used ONLY when Ollama is unavailable. Requires an API key.
 Supports hundreds of models including Qwen, Llama, Mistral, etc.
 """
 
-import httpx
 import os
+
+import httpx
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _TIMEOUT = 60.0
 
 
 def _get_key() -> str | None:
-    return os.environ.get("OPENROUTER_API_KEY")
+    return (os.environ.get("OPENROUTER_API_KEY") or "").strip() or None
+
+
+def is_configured() -> bool:
+    """True when an API key is set (no network call)."""
+    return _get_key() is not None
 
 
 async def is_available() -> bool:
-    """Check if OpenRouter API key is configured and valid."""
+    """Check that the configured API key is accepted by OpenRouter.
+
+    Uses the authenticated ``/key`` endpoint; ``/models`` is public and would
+    report any non-empty key as valid.
+    """
     key = _get_key()
     if not key:
         return False
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(
-                f"{OPENROUTER_BASE}/models",
+                f"{OPENROUTER_BASE}/key",
                 headers={"Authorization": f"Bearer {key}"},
             )
             return r.status_code == 200
@@ -41,7 +51,7 @@ async def chat(
 ) -> dict:
     """
     Send a chat completion request to OpenRouter.
-    
+
     Returns: { "content": str, "model": str, "provider": "openrouter", "tokens": int }
     """
     key = _get_key()
@@ -70,12 +80,18 @@ async def chat(
             json=payload,
             headers=headers,
         )
-        r.raise_for_status()
+        if r.status_code >= 400:
+            try:
+                err = r.json().get("error") or {}
+                detail = err.get("message") if isinstance(err, dict) else str(err)
+            except ValueError:
+                detail = None
+            raise RuntimeError(f"OpenRouter error {r.status_code} for model '{model}': {detail or r.reason_phrase}")
         data = r.json()
 
-    choice = data.get("choices", [{}])[0]
-    content = choice.get("message", {}).get("content", "")
-    usage = data.get("usage", {})
+    choices = data.get("choices") or [{}]
+    content = (choices[0].get("message") or {}).get("content") or ""
+    usage = data.get("usage") or {}
     tokens = usage.get("total_tokens", 0)
 
     return {

@@ -6,6 +6,7 @@ Enables semantic search: "find similar tasks I've done before."
 """
 
 from pathlib import Path
+
 from friday.config import config, ROOT_DIR
 
 _mem_cfg = config.get("memory", {}).get("long_term", {})
@@ -25,9 +26,13 @@ def _get_collection():
         return _collection
 
     import chromadb
+    from chromadb.config import Settings
 
     Path(_DB_PATH).mkdir(parents=True, exist_ok=True)
-    _client = chromadb.PersistentClient(path=_DB_PATH)
+    # Local-first: never send ChromaDB's anonymous usage telemetry.
+    _client = chromadb.PersistentClient(
+        path=_DB_PATH, settings=Settings(anonymized_telemetry=False)
+    )
     _collection = _client.get_or_create_collection(name=_COLLECTION)
     return _collection
 
@@ -43,6 +48,7 @@ def store(
     col = _get_collection()
     doc = f"Task: {prompt}\nAgent: {agent}\nResult: {output[:500]}"
     meta = {
+        "type": "task",
         "agent": agent,
         "prompt": prompt[:200],
         **(metadata or {}),
@@ -52,15 +58,40 @@ def store(
     col.upsert(ids=[task_id], documents=[doc], metadatas=[meta])
 
 
-def search(query: str, n: int | None = None) -> list[dict]:
-    """Semantic search across past task executions."""
+def update_metadata(task_id: str, fields: dict) -> bool:
+    """Merge fields into an existing entry's metadata. Returns False if absent."""
+    col = _get_collection()
+    existing = col.get(ids=[task_id])
+    if not existing["ids"]:
+        return False
+    meta = dict((existing.get("metadatas") or [{}])[0] or {})
+    meta.update({k: v for k, v in fields.items() if v is not None})
+    col.update(ids=[task_id], metadatas=[meta])
+    return True
+
+
+FEEDBACK_TYPES = ("feedback", "user_feedback")
+
+
+def search(query: str, n: int | None = None, tasks_only: bool = False) -> list[dict]:
+    """Semantic search across past task executions.
+
+    Args:
+        query: Free-text query.
+        n: Maximum results (defaults to ``memory.long_term.max_results``).
+        tasks_only: Exclude feedback records, returning only task executions.
+    """
     col = _get_collection()
     n = n or _MAX_RESULTS
 
-    if col.count() == 0:
+    total = col.count()
+    if total == 0:
         return []
 
-    results = col.query(query_texts=[query], n_results=min(n, col.count()))
+    kwargs: dict = {}
+    if tasks_only:
+        kwargs["where"] = {"type": {"$nin": list(FEEDBACK_TYPES)}}
+    results = col.query(query_texts=[query], n_results=min(n, total), **kwargs)
 
     entries = []
     for i, doc_id in enumerate(results["ids"][0]):

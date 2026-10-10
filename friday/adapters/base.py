@@ -3,13 +3,37 @@ Base adapter for all external agent CLIs.
 
 Each concrete adapter wraps a third-party command behind the same interface so
 the router can execute tasks without knowing the CLI details.
+
+Commands are always run without a shell. The prompt reaches the agent in one
+of three ways, chosen by the placeholders in ``execute_args``:
+
+* ``{prompt}``      — substituted into a single argv element
+* ``{prompt_file}`` — written to a temporary UTF-8 file whose path is passed
+* neither           — written to the process's stdin
+
+Stdin and file delivery avoid OS command-line length limits (project context
+can make prompts long) and keep the prompt away from ``cmd.exe`` parsing when
+the agent is an npm ``.cmd`` shim on Windows.
 """
 
 import asyncio
+import contextlib
+import logging
+import os
 import re
+import shlex
 import shutil
+import signal
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
+
+log = logging.getLogger(__name__)
+
+DEFAULT_EXECUTE_TIMEOUT = 600.0
+_DETECT_TIMEOUT = 10.0
+_HEALTH_TIMEOUT = 15.0
 
 
 @dataclass
@@ -50,8 +74,10 @@ class BaseAdapter:
         self.execute_args = cfg.get("execute_args")
         self.version_args = cfg.get("version_args")
         self.health_args = cfg.get("health_args")
+        self.timeout = float(cfg.get("timeout") or DEFAULT_EXECUTE_TIMEOUT)
 
         # Legacy string patterns are still accepted for custom user configs.
+        # They are tokenised with shlex and run without a shell.
         self.execute_pattern = cfg.get("execute_pattern", "")
         self.version_command = cfg.get("version_command", "")
         self.health_command = cfg.get("health_command")
@@ -63,23 +89,17 @@ class BaseAdapter:
         self._last_check: datetime | None = None
         self._error: str | None = None
 
+    # ── Public API ──────────────────────────────────────────────────
+
     async def detect(self) -> dict:
         """Check whether the CLI is installed and return version info."""
-        if not shutil.which(self.command):
+        if not self._resolve_executable():
             self._installed = False
             self._error = f"'{self.command}' not found on PATH"
             return {"installed": False, "version": None, "error": self._error}
 
         try:
-            if self.version_args is not None:
-                output = await self._exec_args(
-                    [self.command, *self._format_args(self.version_args)],
-                    timeout=10,
-                )
-            else:
-                cmd_str = self.version_command.replace("{cmd}", self.command)
-                output = await self._exec_shell(cmd_str, timeout=10)
-
+            output = await self._run(self._version_argv(), timeout=_DETECT_TIMEOUT)
             version = self._parse_version(output)
             self._version = version
             self._installed = True
@@ -90,77 +110,78 @@ class BaseAdapter:
             self._error = str(exc)
             return {"installed": False, "version": None, "error": str(exc)}
 
-    async def health_check(self) -> dict:
-        """Run an optional health check."""
+    async def health_check(self, refresh: bool = True) -> dict:
+        """Check the CLI is installed and its health command succeeds.
+
+        Args:
+            refresh: Re-run detection first. Pass False when ``detect()`` has
+                just been called to avoid spawning the version command again.
+        """
         if not self.enabled:
             return {"healthy": False, "message": "Disabled in config"}
 
-        detection = await self.detect()
-        if not detection["installed"]:
-            self._healthy = False
-            return {"healthy": False, "message": f"Not installed: {detection['error']}"}
+        if refresh or self._installed is None:
+            await self.detect()
+        self._last_check = datetime.now()
 
-        if self.health_args is not None:
+        if not self._installed:
+            self._healthy = False
+            return {"healthy": False, "message": f"Not installed: {self._error}"}
+
+        argv = self._health_argv()
+        if argv is not None:
             try:
-                await self._exec_args(
-                    [self.command, *self._format_args(self.health_args)],
-                    timeout=15,
-                )
-            except Exception:
-                pass
-        elif self.health_command:
-            try:
-                cmd_str = self.health_command.replace("{cmd}", self.command)
-                await self._exec_shell(cmd_str, timeout=15)
-            except Exception:
-                pass
+                await self._run(argv, timeout=_HEALTH_TIMEOUT)
+            except Exception as exc:
+                self._healthy = False
+                self._error = f"Health check failed: {exc}"
+                return {"healthy": False, "message": self._error}
 
         self._healthy = True
-        self._last_check = datetime.now()
-        return {"healthy": True, "message": f"OK (v{detection['version']})"}
+        return {"healthy": True, "message": f"OK (v{self._version})"}
 
-    async def execute(self, prompt: str, cwd: str | None = None, timeout: float = 120) -> ExecResult:
+    async def execute(self, prompt: str, cwd: str | None = None, timeout: float | None = None) -> ExecResult:
         """Execute a task via the agent CLI."""
         if not self.enabled:
             raise RuntimeError(f"{self.name} is disabled")
 
-        start = asyncio.get_event_loop().time()
+        timeout = timeout if timeout is not None else self.timeout
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        prompt_file: str | None = None
         try:
-            if self.execute_args is not None:
-                output = await self._exec_args(
-                    [self.command, *self._format_args(self.execute_args, prompt=prompt)],
-                    timeout=timeout,
-                    cwd=cwd,
-                )
-            else:
-                safe_prompt = prompt.replace('"', '\\"')
-                cmd_str = (
-                    self.execute_pattern
-                    .replace("{cmd}", self.command)
-                    .replace("{prompt}", safe_prompt)
-                )
-                output = await self._exec_shell(cmd_str, timeout=timeout, cwd=cwd)
+            template = self._execute_template()
+            stdin_data: bytes | None = None
+            if any("{prompt_file}" in arg for arg in template):
+                prompt_file = self._write_prompt_file(prompt)
+            elif not any("{prompt}" in arg for arg in template):
+                stdin_data = prompt.encode("utf-8")
 
-            duration = asyncio.get_event_loop().time() - start
+            argv = self._format_args(template, prompt=prompt, prompt_file=prompt_file)
+            output = await self._run(argv, timeout=timeout, cwd=cwd, stdin_data=stdin_data)
             return ExecResult(
                 success=True,
                 output=output.strip(),
-                duration=round(duration, 2),
+                duration=round(loop.time() - start, 2),
                 agent=self.id,
                 agent_name=self.name,
                 version=self._version,
             )
         except Exception as exc:
-            duration = asyncio.get_event_loop().time() - start
+            log.debug("%s execution failed: %s", self.id, exc)
             return ExecResult(
                 success=False,
                 output="",
-                duration=round(duration, 2),
+                duration=round(loop.time() - start, 2),
                 agent=self.id,
                 agent_name=self.name,
                 version=self._version,
                 error=str(exc),
             )
+        finally:
+            if prompt_file:
+                with contextlib.suppress(OSError):
+                    os.unlink(prompt_file)
 
     def get_status(self) -> AdapterStatus:
         return AdapterStatus(
@@ -176,53 +197,126 @@ class BaseAdapter:
             capabilities=self.capabilities,
         )
 
-    def _format_args(self, args: list, prompt: str | None = None) -> list[str]:
+    # ── Argument building ───────────────────────────────────────────
+
+    def _execute_template(self) -> list[str]:
+        if self.execute_args is not None:
+            return [self.command, *map(str, self.execute_args)]
+        if self.execute_pattern:
+            return self._split_pattern(self.execute_pattern)
+        return [self.command, "{prompt}"]
+
+    def _version_argv(self) -> list[str]:
+        if self.version_args is not None:
+            return [self.command, *self._format_args(self.version_args)]
+        if self.version_command:
+            return self._format_args(self._split_pattern(self.version_command))
+        return [self.command, "--version"]
+
+    def _health_argv(self) -> list[str] | None:
+        if self.health_args is not None:
+            return [self.command, *self._format_args(self.health_args)]
+        if self.health_command:
+            return self._format_args(self._split_pattern(self.health_command))
+        return None
+
+    @staticmethod
+    def _split_pattern(pattern: str) -> list[str]:
+        """Tokenise a legacy ``"{cmd} -p \\"{prompt}\\""`` pattern into argv.
+
+        Placeholders are substituted per token *after* splitting, so the prompt
+        always stays a single argument and is never seen by a shell.
+        """
+        return shlex.split(pattern, posix=True)
+
+    def _format_args(self, args: list, prompt: str | None = None, prompt_file: str | None = None) -> list[str]:
         replacements = {
             "{cmd}": self.command,
+            "{prompt_file}": prompt_file or "",
             "{prompt}": prompt or "",
         }
         formatted = []
         for arg in args:
             value = str(arg)
-            for key, replacement in replacements.items():
-                value = value.replace(key, replacement)
+            # Single pass so text inside the prompt is never re-substituted.
+            value = re.sub(
+                r"\{cmd\}|\{prompt_file\}|\{prompt\}",
+                lambda m: replacements[m.group(0)],
+                value,
+            )
             formatted.append(value)
         return formatted
 
-    async def _exec_args(self, args: list[str], timeout: float = 30, cwd: str | None = None) -> str:
-        """Run a command without invoking a shell, return stdout."""
+    @staticmethod
+    def _write_prompt_file(prompt: str) -> str:
+        fd, path = tempfile.mkstemp(prefix="friday_prompt_", suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(prompt)
+        return path
+
+    def _resolve_executable(self) -> str | None:
+        """Full path of the command, honouring PATHEXT (``.cmd`` shims) on Windows."""
+        return shutil.which(self.command)
+
+    # ── Process execution ───────────────────────────────────────────
+
+    async def _run(
+        self,
+        argv: list[str],
+        timeout: float = 30,
+        cwd: str | None = None,
+        stdin_data: bytes | None = None,
+    ) -> str:
+        """Run a command without a shell and return stdout.
+
+        Raises RuntimeError on a non-zero exit and TimeoutError on timeout.
+        The whole process group is killed on timeout or cancellation so agent
+        sub-processes do not outlive Friday.
+        """
+        executable = shutil.which(argv[0]) or argv[0]
+        kwargs: dict = {}
+        if sys.platform != "win32":
+            kwargs["start_new_session"] = True
+
         proc = await asyncio.create_subprocess_exec(
-            *args,
+            executable,
+            *argv[1:],
+            stdin=asyncio.subprocess.PIPE if stdin_data is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            **kwargs,
         )
-        return await self._communicate(proc, timeout, args[0])
-
-    async def _exec_shell(self, cmd_str: str, timeout: float = 30, cwd: str | None = None) -> str:
-        """Run a legacy shell command, return stdout."""
-        proc = await asyncio.create_subprocess_shell(
-            cmd_str,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
-        return await self._communicate(proc, timeout, cmd_str)
-
-    async def _communicate(self, proc, timeout: float, label: str) -> str:
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_data), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            raise TimeoutError(f"Command timed out after {timeout}s: {label}")
+            await self._kill(proc)
+            raise TimeoutError(f"Command timed out after {timeout:g}s: {argv[0]}") from None
+        except asyncio.CancelledError:
+            await self._kill(proc)
+            raise
 
         out = (stdout or b"").decode("utf-8", errors="replace")
         err = (stderr or b"").decode("utf-8", errors="replace")
 
         if proc.returncode != 0:
-            raise RuntimeError(f"Exit code {proc.returncode}: {err or out}")
+            detail = (err or out).strip()
+            if len(detail) > 2000:
+                detail = detail[-2000:]
+            raise RuntimeError(f"Exit code {proc.returncode}: {detail}")
         return out
+
+    @staticmethod
+    async def _kill(proc) -> None:
+        if proc.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            if sys.platform != "win32":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
 
     @staticmethod
     def _parse_version(output: str) -> str:
