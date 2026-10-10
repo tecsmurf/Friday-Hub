@@ -99,6 +99,9 @@ assistant:
   remind_before_minutes: 15      # reminder lead time for appointments
   workday_start: "09:00"         # used when looking for free slots
   workday_end: "18:00"
+  google_calendar:
+    enabled: true                # sync once `friday calendar connect` has been run
+    calendar_id: primary         # or a specific calendar's ID
 
 learning:
   enabled: true

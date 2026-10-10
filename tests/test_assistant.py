@@ -246,7 +246,7 @@ class TestDaemon:
         auto = assistant.automate("every 2 hours", "agent_task", "x", now=NOW)
         assistant.remind("still delivered", NOW + timedelta(hours=2), now=NOW)
         counts = await daemon.tick(assistant, now=NOW + timedelta(hours=2))
-        assert counts == {"reminders": 1, "automations": 1}
+        assert counts == {"reminders": 1, "automations": 1, "synced": 0}
         stored = assistant.store.get_automation(auto.id)
         assert stored.last_status == "failed" and "exploded" in stored.last_output
 

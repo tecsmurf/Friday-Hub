@@ -23,7 +23,7 @@ todo_app = typer.Typer(help="Manage your to-do list.", no_args_is_help=True)
 remind_app = typer.Typer(help="One-off and repeating reminders.", no_args_is_help=True)
 automate_app = typer.Typer(help="Recurring automations (briefings, notifications, agent tasks).", no_args_is_help=True)
 daemon_app = typer.Typer(help="Background daemon that delivers reminders and runs automations.", no_args_is_help=True)
-calendar_app = typer.Typer(help="Calendar import/export.", no_args_is_help=True)
+calendar_app = typer.Typer(help="Google Calendar sync and .ics export.", no_args_is_help=True)
 
 
 def _assistant():
@@ -48,6 +48,11 @@ def _ok(message: str) -> None:
     console.print(Text("  ✓ ", style="bold green") + Text(message))
 
 
+def _show_warnings(assistant) -> None:
+    for warning in assistant.warnings:
+        console.print(Text(f"  ! {warning}", style="yellow"))
+
+
 def _daemon_hint() -> None:
     show_info("Reminders pop up while `friday daemon run` is running (`friday daemon install` starts it at log-on).")
 
@@ -68,7 +73,9 @@ def do_schedule(title, when, duration=None, location=None, remind_before=None, f
         _fail(str(exc), code=2)
     e = booked.event
     where = f" at {e.location}" if e.location else ""
-    _ok(f"Booked #{e.id} {e.title}{where}: {format_when(e.start)}-{e.end:%H:%M}")
+    synced = " (added to Google Calendar)" if e.external_id else ""
+    _ok(f"Booked #{e.id} {e.title}{where}: {format_when(e.start)}-{e.end:%H:%M}{synced}")
+    _show_warnings(assistant)
     if booked.reminder_at:
         show_info(f"Reminder set for {format_when(booked.reminder_at)}.")
         _daemon_hint()
@@ -105,10 +112,12 @@ def do_automate(schedule, action, payload=None, name=None):
 
 
 def show_agenda(day: datetime | None = None):
-    text = _assistant().briefing(day)
+    assistant = _assistant()
+    text = assistant.briefing(day)
     head, _, body = text.partition("\n")
     console.print(f"[bold bright_cyan]{escape(head)}[/]")
     console.print(Text(body))
+    _show_warnings(assistant)
 
 
 def show_todos(include_done=False):
@@ -208,9 +217,11 @@ def schedule(
 
 def cancel(event_id: int = typer.Argument(..., help="Appointment number from `friday agenda`")):
     """Cancel an appointment (and its pending reminder)."""
-    if not _assistant().cancel(event_id):
+    assistant = _assistant()
+    if not assistant.cancel(event_id):
         _fail(f"No active appointment #{event_id}.")
     _ok(f"Cancelled appointment #{event_id}.")
+    _show_warnings(assistant)
 
 
 def free(
@@ -222,7 +233,9 @@ def free(
         minutes = parse_duration(duration)
     except TimeParseError as exc:
         _fail(str(exc), code=2)
-    slot = _assistant().find_free_slot(minutes, after=_when(after) if after else None)
+    assistant = _assistant()
+    slot = assistant.find_free_slot(minutes, after=_when(after) if after else None)
+    _show_warnings(assistant)
     if not slot:
         _fail("No free slot in the next two weeks within working hours.")
     _ok(f"Next free {duration} slot: {format_when(slot)}")
@@ -446,6 +459,84 @@ def calendar_export(
     """Export appointments as an .ics file (import into Google, Outlook or Apple Calendar)."""
     count = _assistant().export_ics(path)
     _ok(f"Wrote {count} appointment(s) to {path.resolve()}")
+
+
+@calendar_app.command("connect")
+def calendar_connect(
+    credentials: Optional[Path] = typer.Option(
+        None, "--credentials", help='OAuth client JSON ("Desktop app") downloaded from Google Cloud Console'
+    ),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Print the sign-in link instead of opening it"),
+):
+    """Connect Google Calendar (opens a browser to approve access)."""
+    from friday.assistant import google_calendar as gc
+
+    source = credentials or (gc.CREDENTIALS_PATH if gc.CREDENTIALS_PATH.exists() else None)
+    if source is None:
+        _fail(
+            "Pass --credentials <file>. To get one: Google Cloud Console → enable the Google Calendar API → "
+            "Credentials → Create OAuth client ID → Desktop app → Download JSON. "
+            "Full steps: README → Google Calendar.",
+            code=2,
+        )
+    try:
+        account = gc.connect(source, open_browser=not no_browser)
+    except gc.GoogleCalendarError as exc:
+        _fail(str(exc))
+    _ok(f"Google Calendar connected{f' ({account})' if account else ''}.")
+    assistant = _assistant()
+    pushed = assistant.sync_pending()
+    if pushed:
+        show_info(f"Added {pushed} upcoming Friday appointment(s) to Google Calendar.")
+    _show_warnings(assistant)
+
+
+@calendar_app.command("status")
+def calendar_status():
+    """Show whether Google Calendar is connected and reachable."""
+    from datetime import timedelta
+
+    from friday.assistant import google_calendar as gc
+
+    if not gc.ENABLED:
+        show_info("Google Calendar sync is disabled in friday.yaml (assistant.google_calendar.enabled).")
+        return
+    if not gc.is_connected():
+        show_info("Google Calendar: not connected. Run: friday calendar connect --credentials <file>")
+        return
+    now = datetime.now()
+    try:
+        events = gc.get_provider().list_events(now, now + timedelta(days=7))
+    except gc.GoogleCalendarError as exc:
+        _fail(f"Google Calendar connected but not working: {exc}")
+    _ok(f"Google Calendar connected (calendar '{gc.CALENDAR_ID}'); {len(events)} event(s) in the next 7 days.")
+
+
+@calendar_app.command("sync")
+def calendar_sync():
+    """Push upcoming Friday appointments that aren't in Google Calendar yet."""
+    from friday.assistant import google_calendar as gc
+
+    if not gc.is_connected():
+        _fail("Google Calendar is not connected. Run: friday calendar connect --credentials <file>")
+    assistant = _assistant()
+    pushed = assistant.sync_pending()
+    _show_warnings(assistant)
+    if assistant.warnings:
+        raise typer.Exit(1)
+    _ok(f"Synced {pushed} appointment(s) to Google Calendar.")
+
+
+@calendar_app.command("disconnect")
+def calendar_disconnect():
+    """Forget the Google sign-in stored on this computer."""
+    from friday.assistant import google_calendar as gc
+
+    if gc.disconnect():
+        _ok("Disconnected. Events already in Google Calendar are kept.")
+        show_info("To revoke access fully: https://myaccount.google.com/permissions")
+    else:
+        show_info("Google Calendar was not connected.")
 
 
 def register(app: typer.Typer) -> None:

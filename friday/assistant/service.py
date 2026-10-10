@@ -46,8 +46,65 @@ def _hm(value: str) -> tuple[int, int]:
 
 
 class Assistant:
-    def __init__(self, store: AssistantStore | None = None):
+    def __init__(self, store: AssistantStore | None = None, calendar="auto"):
+        """
+        Args:
+            store: Local database (default: the runtime one).
+            calendar: Remote calendar to sync with. ``"auto"`` uses Google
+                Calendar when connected; ``None`` disables sync.
+        """
         self.store = store or AssistantStore()
+        if calendar == "auto":
+            from friday.assistant import google_calendar
+
+            calendar = google_calendar.get_provider()
+        self.calendar = calendar
+        self.warnings: list[str] = []
+
+    # ── Remote calendar ─────────────────────────────────────────────
+
+    def _remote_busy(self, start: datetime, end: datetime) -> list[Event]:
+        """Remote events not created by Friday, as Event objects (id 0). Never raises."""
+        if not self.calendar:
+            return []
+        try:
+            remote = self.calendar.list_events(start, end)
+        except Exception as exc:
+            self._warn(f"Google Calendar unavailable, checked only Friday's calendar ({exc})")
+            return []
+        known = {e.external_id for e in self.store.events_between(start, end) if e.external_id}
+        return [
+            Event(0, r.title, r.start, r.end, r.location, None, "confirmed", "google", r.id, r.start)
+            for r in remote
+            if r.friday_id is None and r.id not in known and r.end > start and r.start < end
+        ]
+
+    def busy(self, start: datetime, end: datetime) -> list[Event]:
+        """Local appointments plus remote busy events, ordered by start."""
+        return sorted(self.store.events_between(start, end) + self._remote_busy(start, end), key=lambda e: e.start)
+
+    def _warn(self, message: str) -> None:
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+    def _push(self, event: Event) -> bool:
+        if not self.calendar or event.external_id:
+            return False
+        try:
+            google_id = self.calendar.create_event(event)
+        except Exception as exc:
+            self._warn(f"Saved in Friday but not yet in Google Calendar ({exc}); it will sync automatically")
+            return False
+        self.store.set_event_external(event.id, "google", google_id)
+        return True
+
+    def sync_pending(self, now: datetime | None = None) -> int:
+        """Push upcoming appointments that aren't in the remote calendar yet."""
+        if not self.calendar:
+            return 0
+        now = now or datetime.now()
+        pending = [e for e in self.store.events_between(now, now + timedelta(days=365)) if not e.external_id]
+        return sum(1 for e in pending if self._push(e))
 
     # ── Appointments ────────────────────────────────────────────────
 
@@ -72,11 +129,13 @@ class Assistant:
         end = start + timedelta(minutes=duration)
 
         if not allow_overlap:
-            clashes = self.store.conflicts(start, end)
+            clashes = self.busy(start, end)
             if clashes:
                 raise SchedulingConflict(clashes, self.find_free_slot(duration, after=start, now=now))
 
         event = self.store.add_event(title, start, end, location=location, notes=notes)
+        if self._push(event):
+            event = self.store.get_event(event.id)
         lead = DEFAULT_REMIND_BEFORE if remind_before is None else remind_before
         reminder_at = None
         if lead >= 0:
@@ -96,13 +155,15 @@ class Assistant:
         cursor += timedelta(minutes=(-cursor.minute) % 15)
         need = timedelta(minutes=duration_minutes)
         ws, we = _hm(WORKDAY_START), _hm(WORKDAY_END)
+        window_start = cursor.replace(hour=0, minute=0)
+        busy = self.busy(window_start, window_start + timedelta(days=days + 1))
 
         for offset in range(days + 1):
             day = (cursor + timedelta(days=offset)).replace(hour=0, minute=0)
             day_start = day.replace(hour=ws[0], minute=ws[1])
             day_end = day.replace(hour=we[0], minute=we[1])
             slot = max(day_start, cursor) if offset == 0 else day_start
-            for event in self.store.events_between(day_start, day_end):
+            for event in (e for e in busy if e.start < day_end and e.end > day_start):
                 if event.start - slot >= need:
                     return slot
                 slot = max(slot, event.end)
@@ -111,7 +172,15 @@ class Assistant:
         return None
 
     def cancel(self, event_id: int) -> bool:
-        return self.store.cancel_event(event_id)
+        event = self.store.get_event(event_id)
+        if not self.store.cancel_event(event_id):
+            return False
+        if event and event.external_id and self.calendar:
+            try:
+                self.calendar.delete_event(event.external_id)
+            except Exception as exc:
+                self._warn(f"Cancelled in Friday, but could not remove it from Google Calendar ({exc})")
+        return True
 
     # ── Todos & reminders ───────────────────────────────────────────
 
@@ -148,12 +217,15 @@ class Assistant:
         label = {0: "Today, ", 1: "Tomorrow, "}.get(offset, "")
         lines = [f"{label}{day:%A %d %B %Y}"]
 
-        events = agenda["events"]
+        day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
+        events = sorted(agenda["events"] + self._remote_busy(day_start, day_start + timedelta(days=1)),
+                        key=lambda e: e.start)
         if events:
             lines.append(f"\nAppointments ({len(events)}):")
             for e in events:
                 where = f" @ {e.location}" if e.location else ""
-                lines.append(f"  {e.start:%H:%M}-{e.end:%H:%M}  #{e.id} {e.title}{where}")
+                ref = f"#{e.id}" if e.id else "(Google)"
+                lines.append(f"  {e.start:%H:%M}-{e.end:%H:%M}  {ref} {e.title}{where}")
         else:
             lines.append("\nNo appointments.")
 
