@@ -14,7 +14,6 @@ they understand the project they're working on.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -84,10 +83,11 @@ class ProjectContext:
 
         if self.file_tree:
             lines.append(f"File Tree ({self.total_files} files):")
-            for entry in self.file_tree[:30]:
+            shown = self.file_tree[:30]
+            for entry in shown:
                 lines.append(f"  {entry}")
-            if self.total_files > 30:
-                lines.append(f"  ... and {self.total_files - 30} more")
+            if len(self.file_tree) > len(shown):
+                lines.append("  ...")
 
         if self.key_files:
             lines.append("Key Files: " + ", ".join(self.key_files))
@@ -217,37 +217,49 @@ class ContextManager:
 
     # ── File tree ───────────────────────────────────────────────────
 
-    def _build_file_tree(self, max_depth: int = 3) -> tuple[list[str], int]:
-        """Build a compact file tree, skipping common noise directories."""
+    def _build_file_tree(
+        self, max_depth: int = 3, max_entries: int = 50, max_scanned: int = 5000
+    ) -> tuple[list[str], int]:
+        """Build a compact file tree, skipping hidden and common noise directories.
+
+        The walk is bounded (``max_scanned`` filesystem entries) so running
+        Friday from a large directory such as ``$HOME`` stays fast. When the
+        bound is hit, ``total`` is a lower bound.
+        """
         skip_dirs = {
-            ".git", "__pycache__", "node_modules", ".venv", "venv",
-            ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
-            "dist", "build", ".egg-info", ".next", ".nuxt",
-            "target", "bin", "obj",
+            "__pycache__", "node_modules", "venv", "dist", "build",
+            "target", "bin", "obj", "site-packages",
         }
         entries: list[str] = []
         total = 0
+        scanned = 0
+
+        def _skip(path: Path) -> bool:
+            name = path.name
+            return name.startswith(".") or name in skip_dirs or name.endswith(".egg-info")
 
         def _walk(path: Path, prefix: str, depth: int) -> None:
-            nonlocal total
-            if depth > max_depth:
+            nonlocal total, scanned
+            if depth > max_depth or scanned >= max_scanned:
                 return
 
             try:
                 children = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-            except PermissionError:
+            except OSError:
                 return
+            scanned += len(children)
 
-            dirs = [c for c in children if c.is_dir() and c.name not in skip_dirs]
+            dirs = [c for c in children if c.is_dir() and not c.is_symlink() and not _skip(c)]
             files = [c for c in children if c.is_file() and not c.name.startswith(".")]
 
             for d in dirs:
-                entries.append(f"{prefix}{d.name}/")
+                if len(entries) < max_entries:
+                    entries.append(f"{prefix}{d.name}/")
                 _walk(d, prefix + "  ", depth + 1)
 
             for f in files:
                 total += 1
-                if len(entries) < 50:  # Cap display entries
+                if len(entries) < max_entries:
                     entries.append(f"{prefix}{f.name}")
 
         _walk(self.cwd, "", 0)
@@ -283,9 +295,10 @@ class ContextManager:
         lines = status.strip().split("\n") if status.strip() else []
         if not lines:
             return "clean"
-        modified = sum(1 for l in lines if l.startswith(" M") or l.startswith("M "))
-        added = sum(1 for l in lines if l.startswith("A ") or l.startswith("??"))
-        deleted = sum(1 for l in lines if l.startswith(" D") or l.startswith("D "))
+        codes = [line[:2] for line in lines]
+        added = sum(1 for c in codes if c == "??" or "A" in c)
+        deleted = sum(1 for c in codes if "D" in c and "A" not in c)
+        modified = sum(1 for c in codes if c != "??" and "A" not in c and "D" not in c)
         parts: list[str] = []
         if modified:
             parts.append(f"{modified} modified")

@@ -8,9 +8,13 @@ The router is an EXECUTION HELPER — Hermes (the brain) is the
 DECISION MAKER. The router just picks the best tool.
 """
 
-import json
-from friday.models import router as model_router
+import logging
+
 from friday.config import config
+from friday.models import router as model_router
+from friday.models.parsing import parse_json_object
+
+log = logging.getLogger(__name__)
 
 _router_cfg = config.get("router", {})
 _DEFAULT_AGENT = _router_cfg.get("default_agent", "claude-code")
@@ -37,6 +41,23 @@ Rules:
 - confidence < 0.5 means you're guessing"""
 
 
+def pick_default(available_agents: dict) -> str:
+    """The configured default agent if available, else the best-priority one."""
+    if _DEFAULT_AGENT in available_agents or not available_agents:
+        return _DEFAULT_AGENT
+    return min(
+        available_agents,
+        key=lambda aid: (getattr(available_agents[aid], "priority", 99), aid),
+    )
+
+
+def _clamp_confidence(value) -> float:
+    try:
+        return min(1.0, max(0.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.5
+
+
 async def route(
     task: str,
     available_agents: dict,
@@ -47,30 +68,28 @@ async def route(
 
     Args:
         task: The user's task description
-        available_agents: { agent_id: AdapterStatus }
+        available_agents: { agent_id: AdapterStatus } — only usable agents
         memory_context: Optional context from past similar tasks
 
     Returns:
         { "agent": str, "reason": str, "confidence": float }
+        The agent is always one of ``available_agents`` when any exist.
     """
-    # Build agent info for the prompt
-    agents_info = ""
-    for aid, status in available_agents.items():
-        if status.installed and status.enabled:
-            caps = ", ".join(status.capabilities)
-            agents_info += f"- {aid} ({status.name}): {caps}\n"
+    default = pick_default(available_agents)
 
-    if not agents_info.strip():
-        return {"agent": _DEFAULT_AGENT, "reason": "No agents available", "confidence": 0.0}
-
-    prompt = _ROUTING_PROMPT.format(
-        agents_info=agents_info.strip(),
-        task=task,
-        default=_DEFAULT_AGENT,
+    agents_info = "\n".join(
+        f"- {aid} ({status.name}): {', '.join(status.capabilities)}"
+        for aid, status in available_agents.items()
     )
+    if not agents_info:
+        return {"agent": default, "reason": "No agents available", "confidence": 0.0}
 
+    if len(available_agents) == 1:
+        return {"agent": default, "reason": "Only available agent", "confidence": 1.0}
+
+    prompt = _ROUTING_PROMPT.format(agents_info=agents_info, task=task, default=default)
     if memory_context:
-        prompt += f"\n\nRelevant past experience:\n{memory_context}"
+        prompt += f"\n\nRelevant past experience (task → agent, outcome):\n{memory_context}"
 
     try:
         response = await model_router.chat(
@@ -78,36 +97,33 @@ async def route(
             role="fast",
             json_mode=True,
         )
-
-        content = response["content"].strip()
-        # Parse JSON from response (handle potential markdown wrapping)
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        decision = json.loads(content)
-
-        # Validate agent exists and is available
-        agent = decision.get("agent", _DEFAULT_AGENT)
-        if agent not in available_agents:
-            agent = _DEFAULT_AGENT
-
+        decision = parse_json_object(response["content"])
+    except Exception as exc:
+        log.info("AI routing failed, using %s: %s", default, exc)
         return {
-            "agent": agent,
-            "reason": decision.get("reason", "AI-selected"),
-            "confidence": min(1.0, max(0.0, float(decision.get("confidence", 0.5)))),
-            "model_used": response.get("model", "unknown"),
-            "provider": response.get("provider", "unknown"),
-        }
-    except Exception as e:
-        # Fallback to priority-based routing
-        return {
-            "agent": _DEFAULT_AGENT,
-            "reason": f"AI routing failed ({e}), using default",
+            "agent": default,
+            "reason": f"AI routing unavailable ({exc}); using {default}",
             "confidence": 0.3,
+            "routing_failed": True,
         }
+
+    agent = decision.get("agent")
+    reason = decision.get("reason") or "AI-selected"
+    confidence = _clamp_confidence(decision.get("confidence", 0.5))
+    if agent not in available_agents:
+        reason = f"Model chose unavailable agent '{agent}'; using {default}"
+        agent = default
+        confidence = min(confidence, 0.3)
+
+    return {
+        "agent": agent,
+        "reason": str(reason),
+        "confidence": confidence,
+        "model_used": response.get("model", "unknown"),
+        "provider": response.get("provider", "unknown"),
+    }
 
 
 def get_fallbacks(agent_id: str) -> list[str]:
     """Get fallback chain for an agent."""
-    return _FALLBACKS.get(agent_id, [])
+    return list(_FALLBACKS.get(agent_id, []))

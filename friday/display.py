@@ -15,6 +15,7 @@ if sys.platform == "win32":
 
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -24,8 +25,8 @@ console = Console(force_terminal=True)
 
 BANNER = """[bold bright_blue]
   +-------------------------------------------+
-  |  FRIDAY HUB v2                            |
-  |  AI Orchestration Operating System        |
+  |  FRIDAY                                   |
+  |  Your personal AI assistant               |
   +-------------------------------------------+[/]"""
 
 
@@ -68,7 +69,6 @@ def show_status(system_status: dict):
 
     for _aid, data in agents.items():
         status_obj = data["status"]
-        health = data["health"]
         guard = data.get("guard", {})
 
         if status_obj.installed and status_obj.healthy:
@@ -80,11 +80,10 @@ def show_status(system_status: dict):
 
         version = f"v{status_obj.version}" if status_obj.version else "-"
         guard_status = guard.get("status", "-")
-        message = health.get("message") if isinstance(health, dict) else None
-        if message and status_obj.error:
-            guard_status = status_obj.error[:40]
+        if status_obj.error:
+            guard_status = status_obj.error.splitlines()[0][:60]
 
-        agent_table.add_row(status_obj.name, version, status, guard_status)
+        agent_table.add_row(escape(status_obj.name), escape(version), status, escape(guard_status))
 
     console.print(agent_table)
     console.print()
@@ -102,8 +101,8 @@ def show_result(result: dict):
     """Display task execution result."""
     if result["success"]:
         routing = result.get("routing", {})
-        agent_name = result.get("agent_name", result.get("agent", "?"))
-        version = result.get("version", "?")
+        agent_name = result.get("agent_name") or result.get("agent") or "?"
+        version = result.get("version")
         duration = result.get("duration", 0)
         confidence = routing.get("confidence", 0) if routing else 0
         reason = routing.get("reason", "") if routing else ""
@@ -112,7 +111,8 @@ def show_result(result: dict):
         header = Text()
         header.append("OK ", style="bold green")
         header.append(agent_name, style="bold bright_cyan")
-        header.append(f"  v{version}", style="dim")
+        if version:
+            header.append(f"  v{version}", style="dim")
         header.append(f"  {duration}s", style="dim")
         if confidence:
             header.append(f"  confidence: {confidence:.0%}", style="dim")
@@ -122,21 +122,26 @@ def show_result(result: dict):
         console.print()
         console.print(header)
         if reason:
-            console.print(f"  [dim italic]{reason}[/]")
+            console.print(f"  [dim italic]{escape(reason)}[/]")
         console.print()
 
+        # Agent output is arbitrary text: render it literally, never as markup.
+        output = result.get("output")
         console.print(Panel(
-            result["output"] or "[dim](no output)[/]",
+            Text(output) if output else Text("(no output)", style="dim"),
             border_style="bright_blue",
             padding=(1, 2),
         ))
     else:
         console.print()
-        console.print("  [bold red]Failed[/]")
-        if result.get("error"):
-            console.print(f"  [red]{result['error']}[/]")
-        elif result.get("output"):
-            console.print(f"  [red]{result['output']}[/]")
+        agent = result.get("agent_name") or result.get("agent")
+        console.print("  [bold red]Failed[/]" + (f" [dim]({escape(agent)})[/]" if agent else ""))
+        if result.get("output"):
+            console.print(Text(f"  {result['output']}", style="red"))
+        if result.get("error") and result.get("error") != result.get("output"):
+            console.print(Text(f"  {result['error']}", style="red"))
+        if result.get("task_id"):
+            console.print(f"  [dim]Task ID: {escape(result['task_id'])}[/]")
         console.print()
 
 
@@ -151,6 +156,7 @@ def show_history(entries: list[dict]):
         box=box.ROUNDED,
         border_style="bright_blue",
     )
+    table.add_column("Task ID", style="dim", no_wrap=True)
     table.add_column("Status", justify="center", width=6)
     table.add_column("Agent", style="bright_cyan", min_width=12)
     table.add_column("Task", style="white", ratio=3)
@@ -159,11 +165,11 @@ def show_history(entries: list[dict]):
 
     for entry in entries:
         status = "[green]OK[/]" if entry.get("success") else "[red]FAIL[/]"
-        agent = entry.get("agent", "?")
-        prompt = (entry.get("prompt", "?"))[:60]
-        duration = f"{entry.get('duration_s', 0)}s"
-        timestamp = entry.get("timestamp", "?")[:19]
-        table.add_row(status, agent, prompt, duration, timestamp)
+        agent = entry.get("agent") or "-"
+        prompt = str(entry.get("prompt") or "?")[:60]
+        duration = f"{entry.get('duration_s') or 0}s"
+        timestamp = str(entry.get("timestamp") or "?")[:19]
+        table.add_row(escape(str(entry.get("id", "?"))), status, escape(str(agent)), escape(prompt), duration, timestamp)
 
     console.print(table)
 
@@ -178,21 +184,27 @@ def show_doctor(system_status: dict):
     for _aid, data in agents.items():
         guard = data.get("guard", {})
         status_obj = data["status"]
+        health = data.get("health") or {}
+        if not health.get("healthy") and status_obj.installed:
+            console.print(f"  [yellow]Unhealthy[/] [bold]{escape(status_obj.name)}[/]: {escape(str(health.get('message')))}")
         if guard.get("status") == "updated":
             console.print(
-                f"  [blue]Updated[/] [bold]{status_obj.name}[/]: "
+                f"  [blue]Updated[/] [bold]{escape(status_obj.name)}[/]: "
                 f"{guard.get('old_version')} -> {guard.get('new_version')}"
             )
+        elif guard.get("status") == "recovered":
+            console.print(f"  [green]Recovered[/] [bold]{escape(status_obj.name)}[/]: smoke test passes again.")
         elif guard.get("status") == "incompatible":
             console.print(
-                f"  [red]Incompatible[/] [bold]{status_obj.name}[/] after update. "
-                f"Adapter needs fixing."
+                f"  [red]Incompatible[/] [bold]{escape(status_obj.name)}[/] "
+                f"v{escape(str(guard.get('new_version')))}: smoke test failed, so tasks are not "
+                f"routed to it. Fix the CLI or its adapter args, then rerun `friday doctor`."
             )
 
 
 def show_error(message: str):
-    console.print(f"\n  [bold red]Error:[/] {message}\n")
+    console.print(f"\n  [bold red]Error:[/] {escape(message)}\n")
 
 
 def show_info(message: str):
-    console.print(f"  [dim]{message}[/]")
+    console.print(f"  [dim]{escape(message)}[/]")

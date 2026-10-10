@@ -1,6 +1,7 @@
 <p align="center">
-  <strong>🧠 Friday Hub v2</strong><br>
-  <em>AI Orchestration Operating System for Developers</em>
+  <strong>🧠 Friday</strong><br>
+  <em>A local-first, Jarvis-style personal assistant: appointments, reminders, todos,
+  daily automations, and AI coding agents</em>
 </p>
 
 <p align="center">
@@ -12,7 +13,21 @@
 
 ---
 
-Friday Hub is a **local-first terminal orchestrator** for AI coding agents. One CLI
+Friday is a **personal assistant that runs on your own computer**. Tell it what you need in
+plain language and it books appointments (refusing double-bookings), sets reminders, keeps
+your to-do list, sends you a daily briefing, and runs recurring automations in the
+background. Anything that needs real work on code or your computer is handed to an AI agent.
+
+```bash
+friday ask "book dentist friday 3pm for 45 minutes at Smile Clinic"
+friday ask "remind me to call mom tomorrow at 6pm"
+friday ask "every weekday at 8am brief me"
+friday ask "every monday at 10am summarize my open GitHub PRs"   # runs through an AI agent
+friday agenda tomorrow
+friday daemon install    # start the background assistant at log-on (Windows)
+```
+
+Under the hood, Friday is also a **terminal orchestrator** for AI coding agents. One CLI
 routes any task to the best available agent — Claude Code, Codex CLI, or OpenClaw —
 using LLM-powered intelligent routing. Every execution is stored in short-term memory,
 long-term ChromaDB semantic memory, and structured JSON task logs, enabling the system
@@ -32,6 +47,7 @@ Friday runs entirely on your machine. The default Ollama models are lightweight 
 
 ## Table of Contents
 
+- [Personal Assistant](#personal-assistant)
 - [Architecture](#architecture)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -47,6 +63,125 @@ Friday runs entirely on your machine. The default Ollama models are lightweight 
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Personal Assistant
+
+Everything is stored in a local SQLite database (`<runtime home>/data/assistant.db`); nothing
+leaves your machine unless an automation asks an AI agent to do something.
+
+### Talk to it: `friday ask`
+
+`friday ask "<anything>"` understands requests with built-in rules first (offline and
+predictable), then the local Ollama model for unusual phrasing. Requests that aren't
+assistant actions are run as agent tasks, like `friday run`. Use `--dry-run` to see how a
+request was understood without doing it, and `--no-llm` to use rules only.
+
+| Say | Friday does |
+|-----|-------------|
+| `book dentist friday 3pm for 45 minutes at Smile Clinic` | books it, checks for clashes, sets a reminder 15 min before |
+| `schedule a meeting with Rahul next monday at 11am` | books "Meeting with Rahul" |
+| `remind me to call mom tomorrow at 6pm` | one-off reminder |
+| `remind me to drink water every 2 hours` | repeating reminder |
+| `todo: finish the report by friday` | adds a todo with a due date |
+| `what's on my agenda tomorrow` | shows the day's briefing |
+| `every weekday at 8am brief me` | daily briefing automation |
+| `every day at 9pm remind me to journal` | recurring notification |
+| `every monday at 10am summarize my github notifications` | recurring AI agent task |
+
+Times understood: `in 20 minutes`, `in 2 hours`, `tomorrow 3pm`, `tonight`, `friday 10am`,
+`next monday at 9`, `14 oct 3pm`, `2026-10-14 14:00`, `noon`. A bare `at 2` … `at 7` means
+afternoon. Dates without a time default to 09:00.
+
+### Direct commands
+
+```bash
+friday schedule "Dentist" --at "friday 3pm" --for 45m --where "Smile Clinic" [--remind 30] [--force]
+friday agenda [tomorrow|friday|2026-10-14]     # appointments, reminders, todos, next free hour
+friday free 2h [--after "monday 9am"]           # next free slot in working hours
+friday cancel <appointment-#>
+
+friday todo add "Buy milk" [--due friday] [--high|--low]
+friday todo list [--all] | friday todo done <#> | friday todo rm <#>
+
+friday remind add "Stretch" --at "in 30 minutes" [--repeat "every 2 hours"]
+friday remind list | friday remind rm <#>
+
+friday automate add "every weekday at 8am" --brief
+friday automate add "every day at 9pm" --notify "Journal for 5 minutes"
+friday automate add "every monday at 10am" --task "summarize my open GitHub PRs"
+friday automate list | pause <#> | resume <#> | run <#> | rm <#>
+
+friday calendar connect --credentials client_secret.json   # Google Calendar sync (see below)
+friday calendar export friday.ics               # .ics for any calendar app
+```
+
+### The background daemon
+
+Reminders and automations need Friday running in the background:
+
+```bash
+friday daemon run          # foreground; Ctrl+C to stop
+friday daemon install      # Windows: start automatically at log-on (Task Scheduler)
+friday daemon uninstall
+```
+
+On macOS/Linux, `friday daemon install` prints a launchd/systemd unit to add. Each
+reminder is delivered exactly once as a desktop notification (Windows toast, macOS
+Notification Center, Linux `notify-send`) and logged to `data/notifications.log`. If the
+computer was off, overdue reminders are delivered on the next start with the time they were
+due, and each missed automation runs once (not once per missed occurrence). Daily briefings
+are also saved to `data/briefings/`.
+
+Agent-task automations run through Hermes exactly like `friday run`, with the agent's normal
+permissions (see [Agent CLIs](#agent-clis)), so they cannot edit files unless you allowed that.
+
+### Assistant settings (`friday.yaml`)
+
+```yaml
+assistant:
+  db_path: ./data/assistant.db
+  default_duration_minutes: 30
+  remind_before_minutes: 15
+  workday_start: "09:00"
+  workday_end: "18:00"
+  google_calendar:
+    enabled: true
+    calendar_id: primary
+```
+
+### Google Calendar
+
+Friday keeps its own calendar (so it works offline) and mirrors it to Google Calendar:
+appointments you book go into Google, cancelling removes them, and your existing Google
+events count as busy time for clash checks, `friday free` and the agenda. If Google is
+unreachable, bookings are saved locally and the daemon syncs them when it's back.
+
+One-time setup (about 5 minutes):
+
+1. Install the Google extra: `pip install -e ".[google]"`.
+2. In [Google Cloud Console](https://console.cloud.google.com/) create a project, then
+   **APIs & Services → Library → Google Calendar API → Enable**.
+3. **APIs & Services → OAuth consent screen**: choose *External*, fill in the app name and
+   your email, and add yourself under *Test users*.
+4. **Credentials → Create credentials → OAuth client ID → Application type: Desktop app**,
+   then **Download JSON**.
+5. Run `friday calendar connect --credentials path/to/client_secret.json` and approve in
+   the browser that opens.
+
+```bash
+friday calendar status       # connected? how many events this week
+friday calendar sync         # push any appointments that haven't reached Google yet
+friday calendar disconnect   # forget the sign-in on this computer
+```
+
+Friday asks only for the `calendar.events` permission (read and write events; it cannot
+change calendar settings or sharing). The client file and token are stored in
+`<runtime home>/data/google/`, readable only by you. While the consent screen is in
+*Testing* mode Google expires the sign-in after 7 days; set the publishing status to
+*In production* (no verification is needed for your own use) to stay signed in.
+To use a calendar other than your main one, set `assistant.google_calendar.calendar_id`.
 
 ---
 
@@ -303,9 +438,22 @@ npm i -g @anthropic-ai/claude-code
 # Codex CLI (OpenAI)
 npm i -g @openai/codex
 
-# OpenClaw
-pip install openclaw
+# OpenClaw (needs its Gateway running; see `openclaw onboard`)
+npm i -g openclaw@latest
 ```
+
+How Friday calls each agent (non-interactively, without a shell):
+
+| Agent | Command | Prompt delivery |
+|-------|---------|-----------------|
+| Claude Code | `claude -p` | stdin |
+| Codex CLI | `codex exec -` | stdin (Codex requires a git repository by default) |
+| OpenClaw | `openclaw agent --agent main --message-file <tmp>` | temp file |
+
+> **Permissions:** in `-p` mode Claude Code only uses tools you have pre-approved, so by
+> default it answers and plans but does not edit files. To let it edit, add
+> `"--permission-mode", "acceptEdits"` to `execute_args` in `friday.yaml`. Codex `exec`
+> runs in its own sandbox. Friday never grants agents extra permissions on its own.
 
 Check what Friday can see:
 
@@ -375,6 +523,22 @@ friday memory "authentication bug fix"
 ```
 
 Returns the most relevant past executions ranked by semantic similarity.
+
+### `friday feedback`
+
+Rate a past task. The rating is stored in the task log and in long-term memory, and the
+router sees it next to similar tasks when choosing an agent.
+
+```bash
+friday feedback task_1791615459_855582 --good
+friday feedback task_1791615459_855582 --bad --comment "edited the wrong file"
+```
+
+### Global options
+
+`friday --verbose <command>` logs diagnostic details (routing errors, memory failures) to stderr.
+
+Commands exit with `0` on success, `1` when a task or check fails, and `2` on usage errors.
 
 ### `friday config`
 
@@ -538,6 +702,7 @@ friday-hub/
 │   │
 │   ├── models/               # 🔮 LLM provider layer
 │   │   ├── router.py         # Dynamic model switching
+│   │   ├── parsing.py        # Robust JSON extraction from LLM replies
 │   │   ├── ollama_client.py  # Ollama REST client
 │   │   └── openrouter_client.py  # OpenRouter API client
 │   │
@@ -547,6 +712,17 @@ friday-hub/
 │   │
 │   ├── learning/             # 📊 Self-improvement
 │   │   └── feedback.py       # Auto + manual feedback
+│   │
+│   ├── assistant/            # 🗓️ Personal assistant
+│   │   ├── store.py          # SQLite: todos, appointments, reminders, automations
+│   │   ├── timeparse.py      # Natural-language dates/times
+│   │   ├── recurrence.py     # "every weekday at 8am"
+│   │   ├── service.py        # Scheduling, conflicts, free slots, briefing, .ics
+│   │   ├── intent.py         # `friday ask` request understanding
+│   │   ├── daemon.py         # Background reminders + automations
+│   │   ├── notify.py         # Desktop notifications
+│   │   ├── google_calendar.py # Google Calendar OAuth + sync
+│   │   └── cli.py            # Assistant commands
 │   │
 │   ├── context/              # 🔍 Project awareness
 │   │   └── context_manager.py # Working directory analysis
@@ -587,7 +763,8 @@ Input → Short-term memory store → Long-term memory search → Plan (if compl
 
 Key behaviors:
 - **Memory-aware**: Searches past executions for context before routing
-- **Fault-tolerant**: If the primary agent fails, automatically tries the fallback chain
+- **Fault-tolerant**: If the primary agent fails, tries each agent in its configured
+  fallback chain once (not when `--agent` forces a specific agent)
 - **Self-documenting**: Every step is logged with full metadata
 
 #### `friday/router/ai_router.py` — AI Router
@@ -644,7 +821,10 @@ Resilience against agent CLI updates:
 Two feedback paths:
 - **Automatic**: After every task, heuristically scores the result (output length,
   success/failure) and stores it in long-term memory
-- **Manual**: `submit_feedback()` accepts thumbs-up/down with optional comments
+- **Manual**: `friday feedback <task-id> --good/--bad` tags the task with the user's rating
+
+The router's prompt lists similar past tasks with the agent used, whether it succeeded,
+and any user rating.
 
 Future routing queries this feedback history to inform agent selection.
 
@@ -674,10 +854,16 @@ which claude  # or: where claude (Windows)
 
 ### "Command timed out"
 
-Agent execution took longer than the 120-second default timeout.
+Agent execution took longer than the agent's timeout (600 seconds by default).
 
-**Fix**: For long-running tasks, this is expected. The timeout is set in `base.py`
-and can be adjusted in the adapter configuration.
+**Fix**: Raise `timeout` (seconds) for that agent in `friday.yaml`. Friday kills the agent's
+whole process tree when the timeout hits.
+
+### An agent shows "Warning" or "incompatible" in `friday doctor`
+
+The agent's smoke test (`health_args`, e.g. `codex exec --help`) failed. After a CLI update,
+the version guard marks the agent incompatible and stops routing to it until the smoke test
+passes again. Run the command shown by `friday doctor` yourself to see the error.
 
 ### ChromaDB import errors
 
@@ -692,14 +878,27 @@ pip install pysqlite3-binary
 
 ### Ollama model not found
 
+Routing falls back to the default agent and `friday --verbose run ...` shows:
+
 ```
-Error: model 'qwen3:4b' not found
+ollama: Ollama error 404 for model 'qwen3:4b': model "qwen3:4b" not found, try pulling it first
 ```
 
 **Fix**: Pull the model first:
 ```bash
 ollama pull qwen3:4b
 ```
+
+---
+
+## Privacy
+
+- Task prompts, outputs and logs stay in the runtime data directory on your machine.
+- ChromaDB's anonymous telemetry is turned off.
+- On first use ChromaDB downloads its default embedding model (~80 MB) once; after that
+  semantic memory works offline.
+- Prompts go to whichever agent CLI runs the task, and the routing/planning prompt goes to
+  OpenRouter only when Ollama is unavailable and `OPENROUTER_API_KEY` is set.
 
 ---
 
@@ -724,11 +923,16 @@ copy .env.example .env
 
 ### Running Tests
 
-Tests are designed to run **offline** — no Ollama or agent CLIs required:
+Tests are designed to run **offline** — no Ollama or agent CLIs required, and they use a
+temporary `FRIDAY_HOME` so your real memory and logs are untouched:
 
 ```bash
-pytest tests/ -v
+pytest -q
+ruff check friday tests
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint and tests on Linux and Windows (Python 3.10 and
+3.13) and builds the wheel.
 
 ### Code Structure Conventions
 
