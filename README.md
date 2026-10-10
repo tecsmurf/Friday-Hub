@@ -16,13 +16,16 @@
 Friday is a **personal assistant that runs on your own computer**. Tell it what you need in
 plain language and it books appointments (refusing double-bookings), sets reminders, keeps
 your to-do list, sends you a daily briefing, and runs recurring automations in the
-background. Anything that needs real work on code or your computer is handed to an AI agent.
+background. It drives a real browser (Playwright) to research topics, read pages and do tasks
+on websites for you. Anything that needs real work on code or your computer is handed to an AI agent.
 
 ```bash
 friday ask "book dentist friday 3pm for 45 minutes at Smile Clinic"
 friday ask "remind me to call mom tomorrow at 6pm"
 friday ask "every weekday at 8am brief me"
 friday ask "every monday at 10am summarize my open GitHub PRs"   # runs through an AI agent
+friday ask "research best budget 4K monitors 2026"                # cited report from real sources
+friday ask "go to amazon.in and find the price of a kindle paperwhite"   # browser agent
 friday agenda tomorrow
 friday daemon install    # start the background assistant at log-on (Windows)
 ```
@@ -48,6 +51,7 @@ Friday runs entirely on your machine. The default Ollama models are lightweight 
 ## Table of Contents
 
 - [Personal Assistant](#personal-assistant)
+- [Browser and Research](#browser-and-research)
 - [Architecture](#architecture)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -89,6 +93,12 @@ request was understood without doing it, and `--no-llm` to use rules only.
 | `every weekday at 8am brief me` | daily briefing automation |
 | `every day at 9pm remind me to journal` | recurring notification |
 | `every monday at 10am summarize my github notifications` | recurring AI agent task |
+| `research electric scooters under 1 lakh` | cited research report ([details](#browser-and-research)) |
+| `search the web for python 3.14 release date` | lists search results |
+| `open example.com` / `take a screenshot of example.com` | reads the page / saves a screenshot |
+| `go to amazon.in and find the price of a kindle` | browser agent does it |
+| `run my check-bill routine` | replays a saved web routine |
+| `every weekday at 8am research AI news` | daily research report automation |
 
 Times understood: `in 20 minutes`, `in 2 hours`, `tomorrow 3pm`, `tonight`, `friday 10am`,
 `next monday at 9`, `14 oct 3pm`, `2026-10-14 14:00`, `noon`. A bare `at 2` … `at 7` means
@@ -182,6 +192,111 @@ change calendar settings or sharing). The client file and token are stored in
 *Testing* mode Google expires the sign-in after 7 days; set the publishing status to
 *In production* (no verification is needed for your own use) to stay signed in.
 To use a calendar other than your main one, set `assistant.google_calendar.calendar_id`.
+
+---
+
+## Browser and Research
+
+Friday drives a real Chromium browser through [Playwright](https://playwright.dev/python/), so
+it can read JavaScript-heavy sites, stay signed in to your accounts, and click and type like
+you would.
+
+### Setup (once)
+
+```bash
+pip install -e ".[browser]"      # or: pip install "friday-hub[browser]"
+friday web setup                 # downloads Playwright's Chromium
+friday web status                # checks a browser can start
+```
+
+On Windows, if the Chromium download is blocked, Friday falls back to the Microsoft Edge that
+is already installed (or set `web.browser_channel: msedge`).
+
+### Research: `friday research`
+
+```bash
+friday research "best budget 4K monitors 2026"
+friday research "visa rules for Indians visiting Japan" --sources 8 --out japan.md
+friday ask "compare iphone 17 and pixel 10"
+friday automate add "every weekday at 8am" --research "AI news today"   # fresh report every morning
+```
+
+Friday searches the web (DuckDuckGo by default, no key needed), reads the best sources
+(plain HTTP first, the real browser for sites that need JavaScript or block bots), keeps the
+passages that match your question, and has the AI model write an answer that cites every
+claim as `[1]`, `[2]`... with the source list at the end. Reports are saved as Markdown in
+`data/research/`. With no AI model reachable (or `--no-llm`), the report quotes the most
+relevant passages from each source instead, still cited.
+
+### Browse and do things: `friday web`
+
+```bash
+friday web open example.com [--links] [--full] [--screenshot page.png] [--show]
+friday web shot news.ycombinator.com hn.png [--viewport]
+friday web search "python 3.14 release date"
+friday web do "find the opening hours of Pune central library"          # AI-driven browsing
+friday web do "find the price of a kindle paperwhite" --url amazon.in --save kindle-price
+friday web login mail.google.com     # sign in once in a visible window; Friday reuses it
+```
+
+`friday web do` gives the AI model the page text and a numbered list of buttons, links and
+fields; it decides each step (open, click, type, press, select, scroll) until it has the
+answer. Add `--show` to watch it, and `--save <name>` to keep the steps as a routine that
+replays later without the AI model. It works best with a capable model (set
+`OPENROUTER_API_KEY` or use a larger Ollama model as the brain).
+
+### Saved web routines
+
+A routine is a list of browser steps in `data/routines/<name>.yaml`:
+
+```yaml
+description: Check my electricity bill
+steps:
+  - goto: https://example-power.com/login
+  - fill: {target: Email, value: "${env:POWER_EMAIL}"}
+  - fill: {target: Password, value: "${env:POWER_PASSWORD}"}
+  - click: Sign in
+  - wait: Amount due
+  - extract: {target: "css=.amount-due", as: amount}
+  - screenshot: bill.png
+```
+
+```bash
+friday web routine new check-bill    # template to edit
+friday web routine run check-bill [--show]
+friday web routine list | show <name> | rm <name>
+friday automate add "every monday at 9am" --routine check-bill
+friday ask "run my check-bill routine"
+```
+
+Targets are what you see on the page (button text, a field's label or placeholder) or a
+selector like `css=.price`. Passwords and other secrets are written as `${env:NAME}` and read
+from your environment or `.env`, never stored in the routine. Steps are: `goto`, `click`,
+`fill`, `press`, `select`, `wait`, `read`, `extract`, `screenshot`, `scroll`, `back`.
+
+### Safety: Friday asks before it commits
+
+Reading is free; committing is not. Before Friday clicks something like **Buy**, **Place
+order**, **Pay**, **Send**, **Post**, **Submit**, **Confirm**, **Delete** or **Subscribe**,
+submits a non-search form, or types into a card/bank field, it stops and asks
+`Friday wants to click "Place order" on https://... Go ahead?`. In the background daemon
+(where nobody can answer) the routine stops there and the notification says it needs your OK.
+`--yes` skips the question for that one run.
+
+### Web settings (`friday.yaml`)
+
+```yaml
+web:
+  headless: true                  # false = always show the browser window
+  browser_channel: ""             # "msedge" / "chrome" to use an installed browser
+  timeout_seconds: 30
+  profile_dir: ./data/browser-profile
+  search_provider: duckduckgo     # duckduckgo | brave (BRAVE_API_KEY) | searxng
+  searxng_url: ""
+  research:
+    max_sources: 6
+    output_dir: ./data/research
+```
 
 ---
 
@@ -723,6 +838,16 @@ friday-hub/
 │   │   ├── notify.py         # Desktop notifications
 │   │   ├── google_calendar.py # Google Calendar OAuth + sync
 │   │   └── cli.py            # Assistant commands
+│   │
+│   ├── web/                  # 🌐 Browser + research
+│   │   ├── browser.py        # Playwright browser: open, read, click, fill, screenshot
+│   │   ├── safety.py         # Ask before buy/send/post/submit/delete
+│   │   ├── search.py         # DuckDuckGo / Brave / SearXNG search
+│   │   ├── research.py       # Search → read → cited Markdown report
+│   │   ├── routines.py       # Saved, replayable web routines (YAML)
+│   │   ├── agent.py          # LLM-driven browsing for `friday web do`
+│   │   ├── extract.py        # Readable text from HTML
+│   │   └── cli.py            # `friday research`, `friday web ...`
 │   │
 │   ├── context/              # 🔍 Project awareness
 │   │   └── context_manager.py # Working directory analysis

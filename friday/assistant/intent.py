@@ -24,7 +24,9 @@ from friday.assistant.timeparse import (
 
 log = logging.getLogger(__name__)
 
-KINDS = ("todo", "remind", "schedule", "agenda", "automate", "list_todos", "agent_task")
+KINDS = ("todo", "remind", "schedule", "agenda", "automate", "list_todos", "research", "web_search", "web_open",
+         "screenshot", "web_task", "routine", "agent_task")
+AUTOMATE_ACTIONS = ("briefing", "notify", "agent_task", "research", "web_routine")
 
 
 @dataclass
@@ -58,6 +60,21 @@ _TIME_PHRASES = [
 ]
 _TIME_RE = re.compile("|".join(f"(?:{p})" for p in _TIME_PHRASES), re.I)
 _DURATION_RE = re.compile(r"\bfor\s+(\d+\s*(?:minutes?|mins?|m|hours?|hrs?|h)(?:\s*(?:and\s+)?\d+\s*(?:minutes?|mins?|m))?)\b", re.I)
+_URL = r"(?:https?://\S+|(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#]\S*)?)"
+_CODE_WORDS_RE = re.compile(r"\b(code|codebase|repo|repository|files?|folders?|director(?:y|ies)|project|tests?|bug|"
+                            r"function|class|module|logs?|stack ?trace|error)\b", re.I)
+_RESEARCH_RE = re.compile(
+    r"^(?:please\s+)?(?:(?:do\s+(?:some\s+|a\s+)?)?research(?:\s+(?:on|about|into))?|find out(?:\s+about)?|"
+    r"deep[\s-]?dive\s+(?:into|on)|compare)\s+(.+)$", re.I)
+_LOOK_INTO_RE = re.compile(r"^(?:please\s+)?(?:look into|investigate|dig into)\s+(.+)$", re.I)
+_SEARCH_RE = re.compile(
+    r"^(?:please\s+)?(?:search(?:\s+(?:the\s+)?(?:web|online|internet|google))?(?:\s+for)?|google|look\s?up)\s+(.+)$",
+    re.I)
+_OPEN_RE = re.compile(rf"^(?:please\s+)?(?:open|go to|visit|browse(?:\s+to)?|navigate to)\s+({_URL})"
+                      r"(?:\s*(?:,|and(?: then)?)\s+(.+))?$", re.I)
+_SHOT_RE = re.compile(rf"^(?:take\s+(?:a\s+)?|grab\s+(?:a\s+)?)?screenshot(?:\s+of)?\s+({_URL})\s*$", re.I)
+_ROUTINE_RE = re.compile(r"^(?:run|start|do)\s+(?:my\s+|the\s+)?(?:web\s+)?routine\s+([\w-]+)$|"
+                         r"^(?:run|start|do)\s+(?:my\s+|the\s+)?([\w-]+)\s+routine$", re.I)
 _LOCATION_RE = re.compile(r"\b(?:at|@)\s+(?!\d)([A-Z][\w'&.-]*(?:\s+[A-Z][\w'&.-]*)*)")
 
 
@@ -100,6 +117,35 @@ def _extract_location(text: str) -> tuple[str | None, str]:
     return match.group(1).strip(), text[: match.start()] + text[match.end():]
 
 
+def parse_web(raw: str) -> Intent | None:
+    """Browser and research requests ("research ...", "open site.com and ...")."""
+    m = _ROUTINE_RE.match(raw)
+    if m:
+        return Intent("routine", title=(m.group(1) or m.group(2)).lower())
+    m = _SHOT_RE.match(raw)
+    if m:
+        return Intent("screenshot", title=m.group(1), extra={"url": m.group(1)})
+    m = _OPEN_RE.match(raw)
+    if m:
+        url, task = m.group(1).rstrip(".,"), (m.group(2) or "").strip()
+        if task:
+            return Intent("web_task", title=task, extra={"url": url})
+        return Intent("web_open", title=url, extra={"url": url})
+    m = _RESEARCH_RE.match(raw)
+    if m:
+        topic = raw if raw.lower().startswith("compare") else m.group(1)
+        return Intent("research", title=_tidy(topic))
+    if _CODE_WORDS_RE.search(raw):
+        return None  # "investigate the failing tests" / "search the repo" is work for a coding agent
+    m = _LOOK_INTO_RE.match(raw)
+    if m:
+        return Intent("research", title=_tidy(m.group(1)))
+    m = _SEARCH_RE.match(raw)
+    if m:
+        return Intent("web_search", title=_tidy(m.group(1)))
+    return None
+
+
 def parse_rules(text: str, now: datetime | None = None) -> Intent | None:
     """Deterministic parsing for clear phrasings. None when unsure."""
     raw = " ".join(text.split())
@@ -129,11 +175,20 @@ def parse_rules(text: str, now: datetime | None = None) -> Intent | None:
             rest_l = rest.lower()
             if re.search(r"\b(brief|briefing|agenda|summary of my day)\b", rest_l):
                 return Intent("automate", repeat=schedule, action="briefing", title="Daily briefing")
+            web = parse_web(rest)
+            if web and web.kind == "research":
+                return Intent("automate", repeat=schedule, action="research", title=web.title)
+            if web and web.kind == "routine":
+                return Intent("automate", repeat=schedule, action="web_routine", title=web.title)
             remind = re.match(r"^remind me (?:to |about )?(.+)$", rest, re.I)
             if remind:
                 return Intent("automate", repeat=schedule, action="notify", title=_tidy(remind.group(1)))
             if rest:
                 return Intent("automate", repeat=schedule, action="agent_task", title=rest)
+
+    web = parse_web(raw)
+    if web:
+        return web
 
     m = re.match(r"^(?:remind me|set (?:a )?reminder|reminder)\b(.*)$", raw, re.I)
     if m:
@@ -184,18 +239,21 @@ def parse_rules(text: str, now: datetime | None = None) -> Intent | None:
 
 _LLM_PROMPT = """You classify a user's request to a personal assistant called Friday.
 Respond with ONLY a JSON object:
-{{"kind": "<todo|remind|schedule|agenda|automate|list_todos|agent_task>",
+{{"kind": "<todo|remind|schedule|agenda|automate|list_todos|research|web_search|web_open|web_task|agent_task>",
   "title": "<short title/what, no date words>",
   "when": "<the date/time words exactly as the user wrote them, or empty>",
   "duration": "<duration words like '45 minutes', or empty>",
   "location": "<place, or empty>",
   "repeat": "<recurrence words like 'every weekday at 8am', or empty>",
-  "action": "<for automate: briefing|notify|agent_task>"}}
+  "url": "<website the request names, or empty>",
+  "action": "<for automate: briefing|notify|agent_task|research>"}}
 
 Kinds: todo = add to-do item; remind = one-off or repeating reminder; schedule = book an
 appointment/meeting/event; agenda = show plans for a day; automate = do something on a
-recurring schedule; list_todos = show to-dos; agent_task = anything else, e.g. coding,
-research or computer work for an AI agent.
+recurring schedule; list_todos = show to-dos; research = research a topic on the web and
+write a cited report; web_search = list search results; web_open = open/read a web page;
+web_task = do something on a website (check a price, find information by clicking around,
+fill in a form); agent_task = anything else, e.g. coding or work on files for an AI agent.
 
 Request: "{text}"
 """
@@ -232,9 +290,13 @@ async def parse_with_llm(text: str, now: datetime | None = None) -> Intent:
             duration = parse_duration(opt("duration"))
         except TimeParseError:
             duration = None
-    action = opt("action") if opt("action") in ("briefing", "notify", "agent_task") else None
-    return Intent(kind, title=opt("title") or text, when=when, duration=duration, location=opt("location"),
-                  repeat=opt("repeat"), action=action, source="llm")
+    action = opt("action") if opt("action") in AUTOMATE_ACTIONS else None
+    extra = {"url": opt("url")} if opt("url") else {}
+    if kind in ("web_open", "screenshot") and not extra:
+        raise ValueError(f"{kind} without a url")
+    title = text if kind == "web_task" else (opt("title") or text)
+    return Intent(kind, title=title, when=when, duration=duration, location=opt("location"),
+                  repeat=opt("repeat"), action=action, source="llm", extra=extra)
 
 
 async def understand(text: str, now: datetime | None = None, use_llm: bool = True) -> Intent:
