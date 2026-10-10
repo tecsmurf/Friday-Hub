@@ -403,3 +403,15 @@ def test_context_tree_is_bounded(tmp_path):
     assert len(entries) <= 50
     assert total == 120
     assert not any(".cache" in e or "egg-info" in e for e in entries)
+
+
+def test_short_term_recency_with_identical_timestamps(monkeypatch):
+    """Windows' coarse clock gave equal timestamps, so get_recent returned the oldest first."""
+    from friday.memory import short_term
+
+    short_term.clear()
+    monkeypatch.setattr(short_term.time, "time", lambda: 1000.0)
+    for key in ("a", "b", "c"):
+        short_term.put(key, key)
+    assert [e["key"] for e in short_term.get_recent(2)] == ["c", "b"]
+    short_term.clear()
