@@ -95,18 +95,30 @@ async def tick(assistant: Assistant, now: datetime | None = None, desktop: bool 
         store.finish_automation(automation.id, status, output)
         ran += 1
 
-    return {"reminders": delivered, "automations": ran}
+    synced = 0
+    if assistant.calendar is not None:
+        synced = assistant.sync_pending(now)
+        for warning in assistant.warnings:
+            log.warning(warning)
+        assistant.warnings.clear()
+
+    return {"reminders": delivered, "automations": ran, "synced": synced}
 
 
 async def run_forever(tick_seconds: int = TICK_SECONDS, desktop: bool = True) -> None:
     log.info("Friday daemon started (tick %ss)", tick_seconds)
+    from friday.assistant import google_calendar
+
     with AssistantStore() as store:
         assistant = Assistant(store)
         while True:
+            if assistant.calendar is None:  # picks up `friday calendar connect` without a restart
+                assistant.calendar = google_calendar.get_provider()
             try:
                 counts = await tick(assistant, desktop=desktop)
                 if any(counts.values()):
-                    log.info("Delivered %(reminders)s reminder(s), ran %(automations)s automation(s)", counts)
+                    log.info("Delivered %(reminders)s reminder(s), ran %(automations)s automation(s), "
+                             "synced %(synced)s appointment(s)", counts)
             except Exception:
                 log.exception("Daemon tick failed")
             await asyncio.sleep(tick_seconds)

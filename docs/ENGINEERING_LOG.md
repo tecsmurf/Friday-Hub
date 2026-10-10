@@ -94,6 +94,20 @@ capability underneath.
   construction is unit-tested and CI runs the suite on Windows), macOS notifications.
 
 ### Not done yet
-- Two-way sync with Google Calendar / Outlook (waiting on which calendar to use; needs
-  OAuth credentials from the user).
 - Email, messaging and voice input are out of scope for this pass.
+
+## 2026-10-10 — Google Calendar sync
+
+ADitya chose Google Calendar. Added `friday/assistant/google_calendar.py` (optional extra
+`[google]`): installed-app OAuth with PKCE and loopback redirect, `calendar.events` scope
+only, token stored 0600 and refreshed automatically; a small httpx Calendar v3 client
+(paginated listing with recurring events expanded, "free" events ignored, create/delete,
+readable API errors). Friday's local calendar stays the source of truth: bookings are pushed
+to Google, cancellations delete there, Google events block time in clash checks, free-slot
+search and the agenda, and offline bookings sync later (CLI or daemon tick) without
+duplicates. New commands: `friday calendar connect|status|sync|disconnect`.
+
+Tests: 17 new (`tests/test_google_calendar.py`, MockTransport + fake calendar); suite 174
+passed. Verified the real consent URL (scope, loopback redirect, PKCE S256, offline access).
+Not verified: a real sign-in and real event creation, which need ADitya's Google
+credentials.

@@ -113,7 +113,8 @@ friday automate add "every day at 9pm" --notify "Journal for 5 minutes"
 friday automate add "every monday at 10am" --task "summarize my open GitHub PRs"
 friday automate list | pause <#> | resume <#> | run <#> | rm <#>
 
-friday calendar export friday.ics               # import into Google/Outlook/Apple Calendar
+friday calendar connect --credentials client_secret.json   # Google Calendar sync (see below)
+friday calendar export friday.ics               # .ics for any calendar app
 ```
 
 ### The background daemon
@@ -145,12 +146,42 @@ assistant:
   remind_before_minutes: 15
   workday_start: "09:00"
   workday_end: "18:00"
+  google_calendar:
+    enabled: true
+    calendar_id: primary
 ```
 
-### Calendar sync
+### Google Calendar
 
-Appointments live in Friday's own calendar today and can be exported as `.ics`. Two-way sync
-with an online calendar (Google Calendar or Outlook) is not built yet.
+Friday keeps its own calendar (so it works offline) and mirrors it to Google Calendar:
+appointments you book go into Google, cancelling removes them, and your existing Google
+events count as busy time for clash checks, `friday free` and the agenda. If Google is
+unreachable, bookings are saved locally and the daemon syncs them when it's back.
+
+One-time setup (about 5 minutes):
+
+1. Install the Google extra: `pip install -e ".[google]"`.
+2. In [Google Cloud Console](https://console.cloud.google.com/) create a project, then
+   **APIs & Services → Library → Google Calendar API → Enable**.
+3. **APIs & Services → OAuth consent screen**: choose *External*, fill in the app name and
+   your email, and add yourself under *Test users*.
+4. **Credentials → Create credentials → OAuth client ID → Application type: Desktop app**,
+   then **Download JSON**.
+5. Run `friday calendar connect --credentials path/to/client_secret.json` and approve in
+   the browser that opens.
+
+```bash
+friday calendar status       # connected? how many events this week
+friday calendar sync         # push any appointments that haven't reached Google yet
+friday calendar disconnect   # forget the sign-in on this computer
+```
+
+Friday asks only for the `calendar.events` permission (read and write events; it cannot
+change calendar settings or sharing). The client file and token are stored in
+`<runtime home>/data/google/`, readable only by you. While the consent screen is in
+*Testing* mode Google expires the sign-in after 7 days; set the publishing status to
+*In production* (no verification is needed for your own use) to stay signed in.
+To use a calendar other than your main one, set `assistant.google_calendar.calendar_id`.
 
 ---
 
@@ -690,6 +721,7 @@ friday-hub/
 │   │   ├── intent.py         # `friday ask` request understanding
 │   │   ├── daemon.py         # Background reminders + automations
 │   │   ├── notify.py         # Desktop notifications
+│   │   ├── google_calendar.py # Google Calendar OAuth + sync
 │   │   └── cli.py            # Assistant commands
 │   │
 │   ├── context/              # 🔍 Project awareness
