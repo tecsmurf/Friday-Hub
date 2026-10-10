@@ -93,6 +93,13 @@ health:
   smoke_test_timeout: 15
   version_lock_path: ./data/versions.lock.json
 
+assistant:
+  db_path: ./data/assistant.db
+  default_duration_minutes: 30   # appointment length when none is given
+  remind_before_minutes: 15      # reminder lead time for appointments
+  workday_start: "09:00"         # used when looking for free slots
+  workday_end: "18:00"
+
 learning:
   enabled: true
   auto_evaluate: true

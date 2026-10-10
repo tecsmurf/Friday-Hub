@@ -64,3 +64,36 @@ instead of three times. Planner and router LLM calls now run concurrently on `fr
 - Short-term memory is per-process, so it does not carry over between CLI invocations.
 - Product direction changed to a Jarvis-style personal assistant (tasks, automations,
   appointments); see the next entry.
+
+## 2026-10-10 — Personal assistant layer (new product direction)
+
+### Why
+ADitya set a new vision: Friday should work like Jarvis — do tasks, automate daily
+routines, and schedule appointments. The agent orchestrator stays as the "do real work"
+capability underneath.
+
+### Built (`friday/assistant/`)
+- SQLite store (WAL, survives restarts, safe for CLI + daemon at once) for todos,
+  appointments, reminders and automations.
+- Offline natural-language time parsing and recurrence rules.
+- Scheduling with overlap detection, next-free-slot suggestions, automatic reminders,
+  cancellation, daily briefing, RFC 5545 `.ics` export.
+- `friday ask`: rules first, local LLM second (its times are re-parsed locally), agent task
+  last.
+- Daemon: exactly-once reminder delivery (conditional updates), automations claimed before
+  running so crashes or two daemons never double-run, missed work runs once, failures
+  recorded without stopping the loop. Windows log-on install via Task Scheduler.
+- Desktop notifications with no dependencies; text passed via environment, not scripts.
+
+### Tests
+- `pytest -q`: **157 passed** (67 new in `tests/test_assistant.py`).
+- Manual: full CLI flow (book, clash refused, remind, todos, automations, agenda, free slot,
+  `.ics` export) and `python -m friday daemon run` delivering a due reminder and a due
+  automation, with the automation rescheduled.
+- Not tested: Windows toast and `schtasks` install (no Windows machine here; command
+  construction is unit-tested and CI runs the suite on Windows), macOS notifications.
+
+### Not done yet
+- Two-way sync with Google Calendar / Outlook (waiting on which calendar to use; needs
+  OAuth credentials from the user).
+- Email, messaging and voice input are out of scope for this pass.

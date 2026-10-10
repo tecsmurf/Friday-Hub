@@ -25,8 +25,8 @@ console = Console(force_terminal=True)
 
 BANNER = """[bold bright_blue]
   +-------------------------------------------+
-  |  FRIDAY HUB v2                            |
-  |  AI Orchestration Operating System        |
+  |  FRIDAY                                   |
+  |  Your personal AI assistant               |
   +-------------------------------------------+[/]"""
 
 
