@@ -1,6 +1,7 @@
 <p align="center">
-  <strong>🧠 Friday Hub v2</strong><br>
-  <em>AI Orchestration Operating System for Developers</em>
+  <strong>🧠 Friday</strong><br>
+  <em>A local-first, Jarvis-style personal assistant: appointments, reminders, todos,
+  daily automations, and AI coding agents</em>
 </p>
 
 <p align="center">
@@ -12,7 +13,21 @@
 
 ---
 
-Friday Hub is a **local-first terminal orchestrator** for AI coding agents. One CLI
+Friday is a **personal assistant that runs on your own computer**. Tell it what you need in
+plain language and it books appointments (refusing double-bookings), sets reminders, keeps
+your to-do list, sends you a daily briefing, and runs recurring automations in the
+background. Anything that needs real work on code or your computer is handed to an AI agent.
+
+```bash
+friday ask "book dentist friday 3pm for 45 minutes at Smile Clinic"
+friday ask "remind me to call mom tomorrow at 6pm"
+friday ask "every weekday at 8am brief me"
+friday ask "every monday at 10am summarize my open GitHub PRs"   # runs through an AI agent
+friday agenda tomorrow
+friday daemon install    # start the background assistant at log-on (Windows)
+```
+
+Under the hood, Friday is also a **terminal orchestrator** for AI coding agents. One CLI
 routes any task to the best available agent — Claude Code, Codex CLI, or OpenClaw —
 using LLM-powered intelligent routing. Every execution is stored in short-term memory,
 long-term ChromaDB semantic memory, and structured JSON task logs, enabling the system
@@ -32,6 +47,7 @@ Friday runs entirely on your machine. The default Ollama models are lightweight 
 
 ## Table of Contents
 
+- [Personal Assistant](#personal-assistant)
 - [Architecture](#architecture)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -47,6 +63,94 @@ Friday runs entirely on your machine. The default Ollama models are lightweight 
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Personal Assistant
+
+Everything is stored in a local SQLite database (`<runtime home>/data/assistant.db`); nothing
+leaves your machine unless an automation asks an AI agent to do something.
+
+### Talk to it: `friday ask`
+
+`friday ask "<anything>"` understands requests with built-in rules first (offline and
+predictable), then the local Ollama model for unusual phrasing. Requests that aren't
+assistant actions are run as agent tasks, like `friday run`. Use `--dry-run` to see how a
+request was understood without doing it, and `--no-llm` to use rules only.
+
+| Say | Friday does |
+|-----|-------------|
+| `book dentist friday 3pm for 45 minutes at Smile Clinic` | books it, checks for clashes, sets a reminder 15 min before |
+| `schedule a meeting with Rahul next monday at 11am` | books "Meeting with Rahul" |
+| `remind me to call mom tomorrow at 6pm` | one-off reminder |
+| `remind me to drink water every 2 hours` | repeating reminder |
+| `todo: finish the report by friday` | adds a todo with a due date |
+| `what's on my agenda tomorrow` | shows the day's briefing |
+| `every weekday at 8am brief me` | daily briefing automation |
+| `every day at 9pm remind me to journal` | recurring notification |
+| `every monday at 10am summarize my github notifications` | recurring AI agent task |
+
+Times understood: `in 20 minutes`, `in 2 hours`, `tomorrow 3pm`, `tonight`, `friday 10am`,
+`next monday at 9`, `14 oct 3pm`, `2026-10-14 14:00`, `noon`. A bare `at 2` … `at 7` means
+afternoon. Dates without a time default to 09:00.
+
+### Direct commands
+
+```bash
+friday schedule "Dentist" --at "friday 3pm" --for 45m --where "Smile Clinic" [--remind 30] [--force]
+friday agenda [tomorrow|friday|2026-10-14]     # appointments, reminders, todos, next free hour
+friday free 2h [--after "monday 9am"]           # next free slot in working hours
+friday cancel <appointment-#>
+
+friday todo add "Buy milk" [--due friday] [--high|--low]
+friday todo list [--all] | friday todo done <#> | friday todo rm <#>
+
+friday remind add "Stretch" --at "in 30 minutes" [--repeat "every 2 hours"]
+friday remind list | friday remind rm <#>
+
+friday automate add "every weekday at 8am" --brief
+friday automate add "every day at 9pm" --notify "Journal for 5 minutes"
+friday automate add "every monday at 10am" --task "summarize my open GitHub PRs"
+friday automate list | pause <#> | resume <#> | run <#> | rm <#>
+
+friday calendar export friday.ics               # import into Google/Outlook/Apple Calendar
+```
+
+### The background daemon
+
+Reminders and automations need Friday running in the background:
+
+```bash
+friday daemon run          # foreground; Ctrl+C to stop
+friday daemon install      # Windows: start automatically at log-on (Task Scheduler)
+friday daemon uninstall
+```
+
+On macOS/Linux, `friday daemon install` prints a launchd/systemd unit to add. Each
+reminder is delivered exactly once as a desktop notification (Windows toast, macOS
+Notification Center, Linux `notify-send`) and logged to `data/notifications.log`. If the
+computer was off, overdue reminders are delivered on the next start with the time they were
+due, and each missed automation runs once (not once per missed occurrence). Daily briefings
+are also saved to `data/briefings/`.
+
+Agent-task automations run through Hermes exactly like `friday run`, with the agent's normal
+permissions (see [Agent CLIs](#agent-clis)), so they cannot edit files unless you allowed that.
+
+### Assistant settings (`friday.yaml`)
+
+```yaml
+assistant:
+  db_path: ./data/assistant.db
+  default_duration_minutes: 30
+  remind_before_minutes: 15
+  workday_start: "09:00"
+  workday_end: "18:00"
+```
+
+### Calendar sync
+
+Appointments live in Friday's own calendar today and can be exported as `.ics`. Two-way sync
+with an online calendar (Google Calendar or Outlook) is not built yet.
 
 ---
 
@@ -577,6 +681,16 @@ friday-hub/
 │   │
 │   ├── learning/             # 📊 Self-improvement
 │   │   └── feedback.py       # Auto + manual feedback
+│   │
+│   ├── assistant/            # 🗓️ Personal assistant
+│   │   ├── store.py          # SQLite: todos, appointments, reminders, automations
+│   │   ├── timeparse.py      # Natural-language dates/times
+│   │   ├── recurrence.py     # "every weekday at 8am"
+│   │   ├── service.py        # Scheduling, conflicts, free slots, briefing, .ics
+│   │   ├── intent.py         # `friday ask` request understanding
+│   │   ├── daemon.py         # Background reminders + automations
+│   │   ├── notify.py         # Desktop notifications
+│   │   └── cli.py            # Assistant commands
 │   │
 │   ├── context/              # 🔍 Project awareness
 │   │   └── context_manager.py # Working directory analysis

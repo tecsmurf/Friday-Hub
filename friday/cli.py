@@ -26,7 +26,7 @@ from friday.display import (
 
 app = typer.Typer(
     name="friday",
-    help="Friday Hub - AI Orchestration Operating System",
+    help="Friday - your personal AI assistant: appointments, reminders, todos, automations, and AI coding agents.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -228,6 +228,11 @@ def show_config():
         priority = agent_config.get("priority", "?")
         console.print(f"    {name:15s} {enabled}  priority: {priority}")
     console.print()
+
+
+from friday.assistant.cli import register as _register_assistant  # noqa: E402
+
+_register_assistant(app)
 
 
 def main():
