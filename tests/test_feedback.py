@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import pytest
-import pytest_asyncio
 
 
 @dataclass

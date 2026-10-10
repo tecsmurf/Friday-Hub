@@ -122,7 +122,7 @@ User → CLI → Hermes Brain → AI Router → Agent Adapter → Result
 - Update `README.md` when user-facing commands or behavior changes
 - Add tests for new functionality
 - Prefer adapter-level fixes when a third-party CLI changes
-- Run `pytest tests/ -v` before submitting
+- Run `pytest -q` and `ruff check friday tests` before submitting
 
 ## Project Structure Reference
 

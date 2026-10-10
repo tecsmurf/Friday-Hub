@@ -303,9 +303,22 @@ npm i -g @anthropic-ai/claude-code
 # Codex CLI (OpenAI)
 npm i -g @openai/codex
 
-# OpenClaw
-pip install openclaw
+# OpenClaw (needs its Gateway running; see `openclaw onboard`)
+npm i -g openclaw@latest
 ```
+
+How Friday calls each agent (non-interactively, without a shell):
+
+| Agent | Command | Prompt delivery |
+|-------|---------|-----------------|
+| Claude Code | `claude -p` | stdin |
+| Codex CLI | `codex exec -` | stdin (Codex requires a git repository by default) |
+| OpenClaw | `openclaw agent --agent main --message-file <tmp>` | temp file |
+
+> **Permissions:** in `-p` mode Claude Code only uses tools you have pre-approved, so by
+> default it answers and plans but does not edit files. To let it edit, add
+> `"--permission-mode", "acceptEdits"` to `execute_args` in `friday.yaml`. Codex `exec`
+> runs in its own sandbox. Friday never grants agents extra permissions on its own.
 
 Check what Friday can see:
 
@@ -375,6 +388,22 @@ friday memory "authentication bug fix"
 ```
 
 Returns the most relevant past executions ranked by semantic similarity.
+
+### `friday feedback`
+
+Rate a past task. The rating is stored in the task log and in long-term memory, and the
+router sees it next to similar tasks when choosing an agent.
+
+```bash
+friday feedback task_1791615459_855582 --good
+friday feedback task_1791615459_855582 --bad --comment "edited the wrong file"
+```
+
+### Global options
+
+`friday --verbose <command>` logs diagnostic details (routing errors, memory failures) to stderr.
+
+Commands exit with `0` on success, `1` when a task or check fails, and `2` on usage errors.
 
 ### `friday config`
 
@@ -538,6 +567,7 @@ friday-hub/
 │   │
 │   ├── models/               # 🔮 LLM provider layer
 │   │   ├── router.py         # Dynamic model switching
+│   │   ├── parsing.py        # Robust JSON extraction from LLM replies
 │   │   ├── ollama_client.py  # Ollama REST client
 │   │   └── openrouter_client.py  # OpenRouter API client
 │   │
@@ -587,7 +617,8 @@ Input → Short-term memory store → Long-term memory search → Plan (if compl
 
 Key behaviors:
 - **Memory-aware**: Searches past executions for context before routing
-- **Fault-tolerant**: If the primary agent fails, automatically tries the fallback chain
+- **Fault-tolerant**: If the primary agent fails, tries each agent in its configured
+  fallback chain once (not when `--agent` forces a specific agent)
 - **Self-documenting**: Every step is logged with full metadata
 
 #### `friday/router/ai_router.py` — AI Router
@@ -644,7 +675,10 @@ Resilience against agent CLI updates:
 Two feedback paths:
 - **Automatic**: After every task, heuristically scores the result (output length,
   success/failure) and stores it in long-term memory
-- **Manual**: `submit_feedback()` accepts thumbs-up/down with optional comments
+- **Manual**: `friday feedback <task-id> --good/--bad` tags the task with the user's rating
+
+The router's prompt lists similar past tasks with the agent used, whether it succeeded,
+and any user rating.
 
 Future routing queries this feedback history to inform agent selection.
 
@@ -674,10 +708,16 @@ which claude  # or: where claude (Windows)
 
 ### "Command timed out"
 
-Agent execution took longer than the 120-second default timeout.
+Agent execution took longer than the agent's timeout (600 seconds by default).
 
-**Fix**: For long-running tasks, this is expected. The timeout is set in `base.py`
-and can be adjusted in the adapter configuration.
+**Fix**: Raise `timeout` (seconds) for that agent in `friday.yaml`. Friday kills the agent's
+whole process tree when the timeout hits.
+
+### An agent shows "Warning" or "incompatible" in `friday doctor`
+
+The agent's smoke test (`health_args`, e.g. `codex exec --help`) failed. After a CLI update,
+the version guard marks the agent incompatible and stops routing to it until the smoke test
+passes again. Run the command shown by `friday doctor` yourself to see the error.
 
 ### ChromaDB import errors
 
@@ -692,14 +732,27 @@ pip install pysqlite3-binary
 
 ### Ollama model not found
 
+Routing falls back to the default agent and `friday --verbose run ...` shows:
+
 ```
-Error: model 'qwen3:4b' not found
+ollama: Ollama error 404 for model 'qwen3:4b': model "qwen3:4b" not found, try pulling it first
 ```
 
 **Fix**: Pull the model first:
 ```bash
 ollama pull qwen3:4b
 ```
+
+---
+
+## Privacy
+
+- Task prompts, outputs and logs stay in the runtime data directory on your machine.
+- ChromaDB's anonymous telemetry is turned off.
+- On first use ChromaDB downloads its default embedding model (~80 MB) once; after that
+  semantic memory works offline.
+- Prompts go to whichever agent CLI runs the task, and the routing/planning prompt goes to
+  OpenRouter only when Ollama is unavailable and `OPENROUTER_API_KEY` is set.
 
 ---
 
@@ -724,11 +777,16 @@ copy .env.example .env
 
 ### Running Tests
 
-Tests are designed to run **offline** — no Ollama or agent CLIs required:
+Tests are designed to run **offline** — no Ollama or agent CLIs required, and they use a
+temporary `FRIDAY_HOME` so your real memory and logs are untouched:
 
 ```bash
-pytest tests/ -v
+pytest -q
+ruff check friday tests
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint and tests on Linux and Windows (Python 3.10 and
+3.13) and builds the wheel.
 
 ### Code Structure Conventions
 

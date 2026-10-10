@@ -1,7 +1,5 @@
 """Tests for friday.adapters — Base adapter behavior."""
 
-import asyncio
-from unittest.mock import patch, AsyncMock
 
 import pytest
 

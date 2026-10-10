@@ -28,12 +28,14 @@ agents:
       - deep-understanding
       - debugging
       - architecture
-    execute_args: ["-p", "{prompt}"]
+    # Prompt is sent on stdin (no {prompt} placeholder): no length limit and
+    # no cmd.exe quoting issues on Windows. In -p mode Claude Code only uses
+    # tools you pre-approve; add e.g. "--permission-mode", "acceptEdits"
+    # here to let it edit files.
+    execute_args: ["-p"]
     version_args: ["--version"]
-    health_args: ["--doctor"]
-    execute_pattern: "{cmd} -p \"{prompt}\""
-    version_command: "{cmd} --version"
-    health_command: "{cmd} --doctor"
+    health_args: ["--help"]
+    timeout: 600
 
   codex:
     name: Codex CLI
@@ -45,12 +47,11 @@ agents:
       - test-generation
       - routine-tasks
       - sandboxed-execution
-    execute_args: ["{prompt}"]
+    # `codex exec` is the non-interactive mode; "-" reads the prompt from stdin.
+    execute_args: ["exec", "-"]
     version_args: ["--version"]
-    health_args: null
-    execute_pattern: "{cmd} \"{prompt}\""
-    version_command: "{cmd} --version"
-    health_command: null
+    health_args: ["exec", "--help"]
+    timeout: 600
 
   openclaw:
     name: OpenClaw
@@ -63,12 +64,11 @@ agents:
       - messaging
       - tool-heavy
       - web-automation
-    execute_args: ["run", "{prompt}"]
+    # Runs one turn on the default "main" agent via the OpenClaw Gateway.
+    execute_args: ["agent", "--agent", "main", "--message-file", "{prompt_file}"]
     version_args: ["--version"]
-    health_args: ["doctor"]
-    execute_pattern: "{cmd} run \"{prompt}\""
-    version_command: "{cmd} --version"
-    health_command: "{cmd} doctor"
+    health_args: ["agent", "--help"]
+    timeout: 600
 
 router:
   default_agent: claude-code
