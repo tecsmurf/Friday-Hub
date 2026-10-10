@@ -1,8 +1,6 @@
 """Tests for friday.memory.short_term — In-memory TTL store."""
 
-import time
 
-import pytest
 
 
 class TestShortTermMemory:
@@ -92,7 +90,7 @@ class TestShortTermMemory:
 
         conv = short_term.get_conversation()
         assert len(conv) == 20
-        assert conv[0]["content"] == "message 6"  # Earliest surviving after truncation
+        assert conv[0]["content"] == "message 5"  # messages 0-24 sent; last 20 are 5-24
 
     def test_clear(self):
         """clear() should remove all entries."""

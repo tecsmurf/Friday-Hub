@@ -3,7 +3,6 @@
 import json
 from pathlib import Path
 
-import pytest
 
 from friday.context.context_manager import ContextManager, ProjectContext, get_context
 

@@ -78,20 +78,26 @@ async def evaluate_result(task_id: str, prompt: str, exec_result) -> dict | None
 
 
 def submit_feedback(task_id: str, thumbs_up: bool, comment: str = "") -> None:
-    """Manual user feedback (thumbs up/down)."""
+    """Manual user feedback (thumbs up/down).
+
+    Stores a feedback record and tags the original task with the rating, so
+    the router's memory context shows how the user judged that agent's work.
+
+    Raises:
+        Exception: when long-term memory is unavailable.
+    """
     score = 0.9 if thumbs_up else 0.2
-    try:
-        long_term.store(
-            task_id=f"user_feedback_{task_id}",
-            prompt=f"User feedback for task {task_id}",
-            output=f"{'👍' if thumbs_up else '👎'} {comment}",
-            agent="user",
-            metadata={
-                "type": "user_feedback",
-                "score": str(score),
-                "thumbs_up": str(thumbs_up),
-                "comment": comment,
-            },
-        )
-    except Exception:
-        pass
+    long_term.update_metadata(task_id, {"user_rating": "good" if thumbs_up else "bad"})
+    long_term.store(
+        task_id=f"user_feedback_{task_id}",
+        prompt=f"User feedback for task {task_id}",
+        output=f"{'👍' if thumbs_up else '👎'} {comment}",
+        agent="user",
+        metadata={
+            "type": "user_feedback",
+            "score": str(score),
+            "thumbs_up": str(thumbs_up),
+            "comment": comment,
+            "original_task": task_id,
+        },
+    )
