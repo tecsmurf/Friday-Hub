@@ -103,6 +103,20 @@ assistant:
     enabled: true                # sync once `friday calendar connect` has been run
     calendar_id: primary         # or a specific calendar's ID
 
+web:
+  headless: true                 # false = watch Friday work in a visible window
+  browser_channel: ""            # "" = Playwright's Chromium, falling back to Edge (Windows) / Chrome
+                                 # set "msedge" or "chrome" to always use that installed browser
+  timeout_seconds: 30
+  profile_dir: ./data/browser-profile   # sign-ins from `friday web login` are kept here
+  routines_dir: ./data/routines
+  screenshot_dir: ./data/screenshots
+  search_provider: duckduckgo    # duckduckgo (no key) | brave (BRAVE_API_KEY) | searxng
+  searxng_url: ""
+  research:
+    max_sources: 6
+    output_dir: ./data/research
+
 learning:
   enabled: true
   auto_evaluate: true

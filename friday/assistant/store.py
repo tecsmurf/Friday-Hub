@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS automations (
 );
 """
 
-ACTIONS = ("briefing", "notify", "agent_task")
+ACTIONS = ("briefing", "notify", "agent_task", "research", "web_routine")
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -304,7 +304,7 @@ class AssistantStore:
                        payload: str | None, next_run: datetime) -> Automation:
         if action not in ACTIONS:
             raise ValueError(f"unknown action {action!r}; expected one of {', '.join(ACTIONS)}")
-        if action in ("notify", "agent_task") and not (payload or "").strip():
+        if action in ("notify", "agent_task", "research", "web_routine") and not (payload or "").strip():
             raise ValueError(f"action {action!r} needs a message or task")
         cur = self.conn.execute(
             "INSERT INTO automations (name, schedule, rule, action, payload, next_run, created_at) "
