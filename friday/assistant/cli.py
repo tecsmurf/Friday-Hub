@@ -181,8 +181,25 @@ def ask(
         if not intent.repeat:
             _fail("How often? e.g. \"every weekday at 8am brief me\"", code=2)
         action = intent.action or "agent_task"
-        do_automate(intent.repeat, action, None if action == "briefing" else intent.title,
-                    name=intent.title if action != "agent_task" else None)
+        name = {"agent_task": None, "research": f"Research: {intent.title}"[:60],
+                "web_routine": f"Routine: {intent.title}"}.get(action, intent.title)
+        do_automate(intent.repeat, action, None if action == "briefing" else intent.title, name=name)
+    elif intent.kind in ("research", "web_search", "web_open", "screenshot", "web_task", "routine"):
+        from friday.web import cli as web
+
+        url = intent.extra.get("url")
+        if intent.kind == "research":
+            web.do_research(intent.title)
+        elif intent.kind == "web_search":
+            web.do_search(intent.title)
+        elif intent.kind == "web_open":
+            web.do_open(url)
+        elif intent.kind == "screenshot":
+            web.do_screenshot(url)
+        elif intent.kind == "web_task":
+            web.do_task(intent.title, url=url)
+        else:
+            web.do_routine(intent.title)
     else:
         from friday.cli import run as run_task
 
@@ -326,14 +343,25 @@ def automate_add(
     brief: bool = typer.Option(False, "--brief", help="Send the daily briefing"),
     notify_: Optional[str] = typer.Option(None, "--notify", help="Show this message"),
     task: Optional[str] = typer.Option(None, "--task", help="Run this task through an AI agent"),
+    research_: Optional[str] = typer.Option(None, "--research", help="Research this topic and save a cited report"),
+    routine: Optional[str] = typer.Option(None, "--routine", help="Run this saved web routine"),
     name: Optional[str] = typer.Option(None, "--name", help="Label for the automation"),
 ):
     """Create a recurring automation."""
-    chosen = [a for a, v in (("briefing", brief), ("notify", notify_), ("agent_task", task)) if v]
+    payloads = {"notify": notify_, "agent_task": task, "research": research_, "web_routine": routine}
+    chosen = [a for a, v in (("briefing", brief), *payloads.items()) if v]
     if len(chosen) != 1:
-        _fail("Choose exactly one of --brief, --notify \"message\" or --task \"prompt\".", code=2)
+        _fail("Choose exactly one of --brief, --notify \"message\", --task \"prompt\", --research \"topic\" "
+              "or --routine name.", code=2)
     action = chosen[0]
-    do_automate(schedule_, action, {"notify": notify_, "agent_task": task}.get(action), name=name)
+    if action == "web_routine":
+        from friday.web.routines import RoutineError, load_routine
+
+        try:
+            load_routine(routine)
+        except RoutineError as exc:
+            _fail(str(exc), code=2)
+    do_automate(schedule_, action, payloads.get(action), name=name)
 
 
 @automate_app.command("list")

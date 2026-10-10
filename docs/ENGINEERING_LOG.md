@@ -111,3 +111,23 @@ Tests: 17 new (`tests/test_google_calendar.py`, MockTransport + fake calendar); 
 passed. Verified the real consent URL (scope, loopback redirect, PKCE S256, offline access).
 Not verified: a real sign-in and real event creation, which need ADitya's Google
 credentials.
+
+## 2026-10-10 — Browser automation and web research
+
+ADitya asked for Friday to do much more of their work, with Playwright and research on their
+behalf. Added `friday/web/` (optional extra `[browser]`): a Playwright browser wrapper
+(Chromium, falling back to installed Edge on Windows / Chrome elsewhere; optional persistent
+profile so `friday web login` sign-ins are reused), web search (DuckDuckGo HTML with a
+browser retry, Brave API, SearXNG), a research pipeline that reads sources and writes a cited
+Markdown report (extractive fallback with no LLM), saved YAML web routines with `${env:VAR}`
+secrets, and an LLM browsing agent (`friday web do`) whose steps can be saved as a routine.
+A safety layer asks before buy/send/post/submit/delete clicks, non-search form submits and
+card-field typing; non-interactive runs stop instead. `friday ask` understands research,
+search, open, screenshot, browser tasks and routines; automations gained `research` and
+`web_routine` actions.
+
+Tests: `tests/test_web.py` (58, including real-browser runs against a local test site: read,
+screenshot, search form, blocked "Place order", routine, scripted agent loop). CI installs
+Chromium on Linux and Windows and requires the browser tests to run. Not verified here: live
+DuckDuckGo search and real websites (the sandbox has no open internet), and `web do` with a
+real model.
