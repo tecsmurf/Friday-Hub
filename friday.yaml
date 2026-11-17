@@ -117,6 +117,25 @@ web:
     max_sources: 6
     output_dir: ./data/research
 
+voice:
+  # Speech recognition (offline, faster-whisper). Bigger = more accurate, slower:
+  # tiny.en | base.en | small.en | medium.en (or tiny/base/small/... for other languages)
+  stt_model: base.en
+  language: en
+  stt_device: cpu                # "cuda" with an NVIDIA GPU
+  stt_compute_type: int8
+  mic_device: ""                 # "" = system default; a number or name from `friday voice status`
+  energy_threshold: 0            # 0 = measure the room's noise at start
+  silence_seconds: 0.9           # pause that ends a request
+  max_record_seconds: 15
+  listen_timeout_seconds: 8      # push-to-talk gives up if you don't speak
+  wake_word: friday              # for `friday voice --wake`
+  # Speech output: auto (pyttsx3, then the OS voice) | pyttsx3 | system | none
+  tts_engine: auto
+  tts_voice: ""                  # part of a voice name, e.g. "Zira" or "David" on Windows
+  tts_rate: 185                  # words per minute
+  speak_notifications: false     # also read reminders aloud from `friday daemon`
+
 learning:
   enabled: true
   auto_evaluate: true
