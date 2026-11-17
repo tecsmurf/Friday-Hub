@@ -495,3 +495,24 @@ def test_real_speech_round_trip(tmp_path):
     intent = parse_rules(clean_command(command))
     assert intent and intent.kind == "remind", heard
     assert "mom" in intent.title.lower() and intent.when.hour == 18, heard
+
+
+def test_broken_sound_system_is_reported_not_crashed(monkeypatch):
+    """sounddevice raises PortAudioError on import when no sound server runs."""
+
+    class PortAudioError(Exception):
+        pass
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def broken(name, *args, **kwargs):
+        if name == "sounddevice":
+            raise PortAudioError("Error initializing PortAudio: Can't connect to server")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    assert listen.Microphone.devices() == []
+    with pytest.raises(listen.VoiceUnavailable, match="PortAudio"):
+        listen.Microphone()
