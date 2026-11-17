@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [
   { name = "Friday Hub contributors" }
 ]
-keywords = ["ai", "agents", "cli", "ollama", "codex", "claude", "openclaw", "playwright", "research", "assistant"]
+keywords = ["ai", "agents", "cli", "ollama", "codex", "claude", "openclaw", "playwright", "research", "assistant", "voice"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -42,6 +42,12 @@ browser = [
 google = [
   "google-auth>=2.20.0",
   "google-auth-oauthlib>=1.0.0",
+]
+voice = [
+  "faster-whisper>=1.0.0",
+  "sounddevice>=0.4.6",
+  "numpy>=1.24",
+  "pyttsx3>=2.90",
 ]
 dev = [
   "pytest>=8.0.0",

@@ -26,7 +26,7 @@ from friday.display import (
 
 app = typer.Typer(
     name="friday",
-    help="Friday - your personal AI assistant: appointments, reminders, todos, automations, web research, browser tasks, and AI coding agents.",
+    help="Friday - your personal AI assistant: appointments, reminders, todos, automations, web research, browser tasks, voice, and AI coding agents.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -237,6 +237,10 @@ _register_assistant(app)
 from friday.web.cli import register as _register_web  # noqa: E402
 
 _register_web(app)
+
+from friday.voice.cli import register as _register_voice  # noqa: E402
+
+_register_voice(app)
 
 
 def main():

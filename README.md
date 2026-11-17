@@ -52,6 +52,7 @@ Friday runs entirely on your machine. The default Ollama models are lightweight 
 
 - [Personal Assistant](#personal-assistant)
 - [Browser and Research](#browser-and-research)
+- [Voice](#voice)
 - [Architecture](#architecture)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -297,6 +298,73 @@ web:
     max_sources: 6
     output_dir: ./data/research
 ```
+
+---
+
+## Voice
+
+Talk to Friday and it talks back. Speech is handled on your own computer: no paid APIs, and
+nothing you say is sent anywhere. Speech recognition is [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(OpenAI's Whisper model, run locally); replies use pyttsx3 or the voice built into Windows, macOS
+or Linux. Everything you say goes through the same understanding as `friday ask`, so anything
+you can type there you can say.
+
+### Setup (once)
+
+```bash
+pip install -e ".[voice]"        # or: pip install "friday-hub[voice]"
+friday voice setup               # downloads the speech model (~150 MB, once), tests mic and voice
+friday voice status              # shows the engines, model and microphones Friday will use
+```
+
+After the one download, voice works offline.
+
+### Talking to Friday
+
+```bash
+friday voice                     # push-to-talk: press Enter, speak, pause; Friday answers out loud
+friday voice --wake              # hands-free: say "Friday, ..." any time
+friday voice --type              # type instead of speaking; replies are still spoken
+friday voice --quiet             # don't speak replies, only print them
+friday voice say "Hello"         # check that speech output works
+```
+
+Things to say:
+
+- "Remind me to call Mom at 6 p.m."
+- "Book the dentist tomorrow at 3 p.m. for 45 minutes"
+- "What's on tomorrow?" / "Am I free this afternoon?"
+- "Add a todo: renew passport by Friday" / "Show my todos"
+- "Research the best budget 4K monitors" (Friday says "On it" and reads the summary when done)
+- "Goodbye" / "That's all" ends the conversation; "Never mind" cancels.
+
+In `--wake` mode, Friday ignores everything that doesn't start with its name, so "move my
+meeting to Friday" won't set it off. Say just "Friday" and it answers "Yes?" and listens. It
+stops listening while it talks, so it doesn't hear itself. Long answers (research reports,
+coding agent results) are summed up in a sentence or two, with the rest on screen.
+
+Friday still asks before buying, sending, posting or deleting anything; in a voice session
+that question appears in the terminal.
+
+### Voice settings (`friday.yaml`)
+
+```yaml
+voice:
+  stt_model: base.en              # tiny.en (fastest) | base.en | small.en (most accurate on CPU)
+  language: en
+  stt_device: cpu                 # "cuda" with an NVIDIA GPU
+  mic_device: ""                  # number or name from `friday voice status`; "" = default
+  energy_threshold: 0             # 0 = measure the room's noise at start
+  silence_seconds: 0.9            # pause that ends a request
+  wake_word: friday
+  tts_engine: auto                # auto | pyttsx3 | system | none
+  tts_voice: ""                   # part of a voice name, e.g. "Zira" or "David" on Windows
+  tts_rate: 185                   # words per minute
+  speak_notifications: false      # true = the daemon also reads reminders aloud
+```
+
+If Friday cuts you off, raise `silence_seconds`. If it doesn't notice you speaking (or
+starts on background noise), set `energy_threshold` by hand, e.g. `0.02` (quieter) to `0.06`.
 
 ---
 
@@ -848,6 +916,12 @@ friday-hub/
 │   │   ├── agent.py          # LLM-driven browsing for `friday web do`
 │   │   ├── extract.py        # Readable text from HTML
 │   │   └── cli.py            # `friday research`, `friday web ...`
+│   │
+│   ├── voice/                # 🎙️ Voice
+│   │   ├── listen.py         # Microphone, speech detection, faster-whisper
+│   │   ├── speech.py         # Text-to-speech (pyttsx3 / OS voice), spoken summaries
+│   │   ├── session.py        # Conversations, wake word, routing through `ask`
+│   │   └── cli.py            # `friday voice ...`
 │   │
 │   ├── context/              # 🔍 Project awareness
 │   │   └── context_manager.py # Working directory analysis
