@@ -117,9 +117,10 @@ class Microphone:
     def __init__(self, device: str | int | None = None):
         try:
             import sounddevice as sd
-        except (ImportError, OSError) as exc:
+        except Exception as exc:  # ImportError, missing PortAudio (OSError), PortAudioError at init
             raise VoiceUnavailable(
-                f"Microphone support isn't installed ({exc}). Run: pip install -e \".[voice]\"") from exc
+                f"Microphone support isn't working ({exc}). Run: pip install -e \".[voice]\", and check the "
+                "computer has a working sound input.") from exc
         if device in ("", None):
             from friday.config import config
 
@@ -169,10 +170,13 @@ class Microphone:
     def devices() -> list[str]:
         try:
             import sounddevice as sd
-        except (ImportError, OSError):
+
+            devices = sd.query_devices()
+        except Exception as exc:  # no PortAudio, or no sound server (e.g. a headless machine)
+            log.info("Can't list microphones: %s", exc)
             return []
         names = []
-        for index, dev in enumerate(sd.query_devices()):
+        for index, dev in enumerate(devices):
             if dev.get("max_input_channels", 0) > 0:
                 names.append(f"{index}: {dev['name']}")
         return names
