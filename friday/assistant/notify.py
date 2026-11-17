@@ -61,11 +61,32 @@ def desktop_command() -> list[str] | None:
     return [exe, "--app-name=Friday", "{title}", "{body}"] if exe else None
 
 
+def _speak(title: str, body: str) -> None:
+    """Read the notification aloud when ``voice.speak_notifications`` is on."""
+    from friday.config import config
+
+    if not (config.get("voice", {}) or {}).get("speak_notifications"):
+        return
+    try:
+        from friday.voice.speech import get_speaker
+
+        label = title.removeprefix("Friday").strip(" :")
+        get_speaker().say(f"{label[:1].upper()}{label[1:]}: {body}" if label else body)
+    except Exception as exc:
+        log.info("Speaking the notification failed: %s", exc)
+
+
 def notify(title: str, body: str, desktop: bool = True, log_path: Path | None = None) -> bool:
     """Show a notification. Returns True if a desktop popup was shown."""
     _log_line(title, body, log_path or NOTIFY_LOG)
     if not desktop:
         return False
+    shown = _popup(title, body)
+    _speak(title, body)
+    return shown
+
+
+def _popup(title: str, body: str) -> bool:
     cmd = desktop_command()
     if not cmd:
         return False

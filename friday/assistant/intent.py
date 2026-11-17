@@ -155,6 +155,13 @@ def parse_rules(text: str, now: datetime | None = None) -> Intent | None:
             re.match(r"^(agenda|my day|brief(ing)?|daily brief(ing)?)\b", lowered):
         day, _ = extract_datetime(raw, now=now)
         return Intent("agenda", when=day)
+    # Spoken-style questions about a day: "what's on tomorrow", "what do I have friday",
+    # "am I free this afternoon". Only with a day, so "what's on reddit" isn't caught.
+    if re.match(r"^(what'?s|what is|anything)\s+(on|happening|planned|scheduled)\b|^what do i have\b|"
+                r"^(am i|are we)\s+(free|busy)\b", lowered):
+        day, _ = extract_datetime(raw, now=now)
+        if day:
+            return Intent("agenda", when=day)
 
     if re.match(r"^(show|list|what are)\b.*\b(todos?|to-dos?|tasks|to do list|todo list)\b", lowered):
         return Intent("list_todos")

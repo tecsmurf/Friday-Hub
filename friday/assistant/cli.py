@@ -162,7 +162,11 @@ def ask(
         details = {k: v for k, v in vars(intent).items() if v not in (None, "", {})}
         console.print(Text(f"  Understood as: {details}"))
         return
+    run_intent(intent, text)
 
+
+def run_intent(intent, text: str) -> None:
+    """Carry out an understood request (shared by `ask` and `voice`)."""
     if intent.kind == "schedule":
         if not intent.when:
             _fail("When should I book it? e.g. friday ask \"book dentist friday 3pm\"", code=2)
