@@ -451,7 +451,7 @@ def _synthesize(text: str, path) -> bool:
         cmd = [exe, "-NoProfile", "-NonInteractive", "-Command", script] if exe else None
     else:
         exe = shutil.which("espeak-ng") or shutil.which("espeak")
-        cmd = [exe, "-s", "150", "-w", str(path), "--", text] if exe else None
+        cmd = [exe, "-v", "en-us", "-s", "135", "-g", "4", "-w", str(path), "--", text] if exe else None
     if not cmd:
         return False
     subprocess.run(cmd, env={**os.environ, "WAV": str(path), "TXT": text}, check=True, timeout=60)
@@ -488,7 +488,8 @@ def test_real_speech_round_trip(tmp_path):
     found = list(utterances(blocks, ListenSettings(threshold=0.02, silence_seconds=0.9, max_seconds=15)))
     assert found, "no utterance detected"
 
-    heard = listen.Transcriber(model="tiny.en").transcribe(np.concatenate(found))
+    # The default model, as users get it; tiny.en mishears the robotic espeak voice.
+    heard = listen.Transcriber(model="base.en").transcribe(np.concatenate(found))
     woke, command = split_wake(heard)
     assert woke, heard
     intent = parse_rules(clean_command(command))
