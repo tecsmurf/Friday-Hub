@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [
   { name = "Friday Hub contributors" }
 ]
-keywords = ["ai", "agents", "cli", "ollama", "codex", "claude", "openclaw"]
+keywords = ["ai", "agents", "cli", "ollama", "codex", "claude", "openclaw", "playwright", "research", "assistant"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -36,6 +36,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+  "playwright>=1.44.0",
+]
 google = [
   "google-auth>=2.20.0",
   "google-auth-oauthlib>=1.0.0",
@@ -44,6 +47,7 @@ dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.0",
   "ruff>=0.6.0",
+  "playwright>=1.44.0",
   "google-auth>=2.20.0",
   "google-auth-oauthlib>=1.0.0",
 ]
