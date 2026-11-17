@@ -66,6 +66,21 @@ async def run_automation(assistant: Assistant, automation: Automation, desktop: 
             desktop=desktop,
         )
         return ("ok" if ok else "failed"), output
+    if automation.action == "research":
+        from friday.web.research import research, save_report
+
+        report = await research(automation.payload or "")
+        path = save_report(report)
+        first = next((line for line in report.answer.splitlines() if line.strip() and not line.startswith("_")), "")
+        notify(f"Friday research: {automation.name}", f"{first[:200]}\nReport: {path}", desktop=desktop)
+        return "ok", f"Report saved to {path}\n\n{report.answer}"
+    if automation.action == "web_routine":
+        from friday.web.routines import load_routine, run_routine
+
+        result = await run_routine(load_routine(automation.payload or ""))
+        notify(f"Friday routine {'done' if result.ok else 'stopped'}: {automation.name}",
+               result.summary(250), desktop=desktop)
+        return ("ok" if result.ok else "failed"), result.summary(4000)
     return "failed", f"unknown action {automation.action}"
 
 
